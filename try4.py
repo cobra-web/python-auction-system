@@ -1,7 +1,16 @@
 import numpy as np
 import time
 import scipy.sparse as sp
-import ot
+
+try:
+    import ot
+    POT_AVAILABLE = True
+except ImportError:
+    POT_AVAILABLE = False
+
+# =====================================================================
+# PART 1: HIERARCHICAL STRUCTURES & UTILITIES (CORRECTED)
+# =====================================================================
 
 class HierarchicalPartition:
     def __init__(self, num_elements, cluster_size=4):
@@ -27,22 +36,44 @@ class HierarchicalPartition:
 def compute_extended_cost(cost_matrix, part_X, part_Y, gen_idx, cell_a, cell_b):
     elements_a = part_X.get_elements_in_cell(gen_idx, cell_a)
     elements_b = part_Y.get_elements_in_cell(gen_idx, cell_b)
-
     return np.min(cost_matrix[elements_a[:, None], elements_b])
 
 
-def hierarchical_consistency_check(cost_matrix, neighborhood_mask, alpha_prime, beta_global, part_X, part_Y):
-    rebidding_list = set()
+def hierarchical_consistency_check_ot(cost_matrix, neighborhood_mask, alpha_prime_tracker, 
+                                      coupling, beta_pairs, beta_unassigned, mu_Y, part_X, part_Y):
+    """
+    Korrektes hierarchisches Konsistenz-Checking unter Verwendung der atomaren 
+    und unzugewiesenen Dualvariablen anstelle eines global kollabierten Vektors.
+    """
+    num_X, num_Y = cost_matrix.shape
+    mask_extended = False
     coarsest_gen = part_X.depth - 1
     cells_a = part_X.get_cells_at_generation(coarsest_gen)
     cells_b = part_Y.get_cells_at_generation(coarsest_gen)
     
+    # Vorberechnen der feinsten impliziten beta-Werte laut Gleichung (10) des Papers
+    beta_effective = np.zeros((num_X, num_Y))
+    for y in range(num_Y):
+        total_assigned_y = np.sum(coupling[:, y])
+        y_has_unassigned = total_assigned_y < mu_Y[y]
+        for x in range(num_X):
+            if coupling[x, y] > 0:
+                beta_effective[x, y] = beta_pairs[x, y]
+            elif y_has_unassigned:
+                beta_effective[x, y] = beta_unassigned[y]
+            else:
+                # Falls voll belegt und keine Kopplung existiert, greift das Maximum der aktiven Kopplungen
+                active_b = beta_pairs[:, y][coupling[:, y] > 0]
+                beta_effective[x, y] = np.max(active_b) if len(active_b) > 0 else beta_unassigned[y]
+
     def check_recursive(gen, cell_a, cell_b):
+        nonlocal mask_extended
         elements_a = part_X.get_elements_in_cell(gen, cell_a)
         elements_b = part_Y.get_elements_in_cell(gen, cell_b)
         
-        alpha_hat_prime = np.max(alpha_prime[elements_a])
-        beta_hat = np.max(beta_global[elements_b])
+        # Nutzen der feinsten Tracking-Werte zur Bestimmung der hierarchischen Grenzen
+        alpha_hat_prime = np.max(alpha_prime_tracker[elements_a])
+        beta_hat = np.max(beta_effective[elements_a[:, None], elements_b])
         c_hat = compute_extended_cost(cost_matrix, part_X, part_Y, gen, cell_a, cell_b)
         
         if c_hat - beta_hat < alpha_hat_prime:
@@ -50,7 +81,7 @@ def hierarchical_consistency_check(cost_matrix, neighborhood_mask, alpha_prime, 
                 x, y = elements_a[0], elements_b[0]
                 if not neighborhood_mask[x, y]:
                     neighborhood_mask[x, y] = True  
-                    rebidding_list.add(x)
+                    mask_extended = True
             else:
                 next_gen = gen - 1
                 children_a = np.unique(part_X.hierarchy[next_gen][elements_a])
@@ -63,10 +94,15 @@ def hierarchical_consistency_check(cost_matrix, neighborhood_mask, alpha_prime, 
         for cb in cells_b:
             check_recursive(coarsest_gen, ca, cb)
             
-    return rebidding_list
+    return mask_extended
+
+
+# =====================================================================
+# PART 2: THE AUCTION CORE ENGINE (Vectorized for Speed)
+# =====================================================================
 
 def ot_auction_round_core(mu_X, mu_Y, cost_matrix, neighborhood_mask, coupling, 
-                            beta_pairs, beta_unassigned, epsilon, force_bidders=None):
+                          beta_pairs, beta_unassigned, epsilon):
     num_X, num_Y = cost_matrix.shape
     rem_mu_X = mu_X - np.sum(coupling, axis=1)
     total_assigned_Y = np.sum(coupling, axis=0)
@@ -75,7 +111,7 @@ def ot_auction_round_core(mu_X, mu_Y, cost_matrix, neighborhood_mask, coupling,
     bids_received = {y: [] for y in range(num_Y)}
     alpha_prime_tracker = np.zeros(num_X)
     
-    bidders = np.where(rem_mu_X > 0)[0] if force_bidders is None else force_bidders
+    bidders = np.where(rem_mu_X > 0)[0]
     
     for x in bidders:
         if rem_mu_X[x] <= 0:
@@ -163,86 +199,139 @@ def ot_auction_round_core(mu_X, mu_Y, cost_matrix, neighborhood_mask, coupling,
 
     return coupling, beta_pairs, beta_unassigned, alpha_prime_tracker
 
-def strict_optimal_transport_auction(mu_X, mu_Y, cost_matrix, neighborhood_mask, theta=4.0):
+
+# =====================================================================
+# PART 3: SINGLE-SCALE SOLVER WITH INTEGRATED MASK-EXPANSION
+# =====================================================================
+
+def solve_single_scale_auction(mu_X, mu_Y, cost_matrix, initial_mask, part_X, part_Y, theta=4.0):
+    """
+    Löst das OT-Problem auf einer dedizierten Skala vollständig. Falls nach einer 
+    erfolgreichen Kopplung die Konsistenzprüfung fehlschlägt, wird die Maske erweitert 
+    und das Problem auf dieser Skala sauber neu aufgerollt.
+    """
     num_X, num_Y = cost_matrix.shape
-    beta_pairs = np.zeros((num_X, num_Y), dtype=np.float64)
-    beta_unassigned = np.zeros(num_Y, dtype=np.float64)
-    coupling = np.zeros((num_X, num_Y), dtype=np.int32)
+    neighborhood_mask = initial_mask.copy()
     
-    C = np.max(cost_matrix[neighborhood_mask]) - np.min(cost_matrix[neighborhood_mask]) 
-    epsilon = C / 4.0 if C != 0 else 1.0
-    target_epsilon = (1.0 / num_X) - 1e-5 
-    
-    while epsilon > target_epsilon:
-        inner_iter = 0
-        while np.sum(coupling) < np.sum(mu_X) and inner_iter < 200:
-            coupling, beta_pairs, beta_unassigned, _ = ot_auction_round_core(
-                mu_X, mu_Y, cost_matrix, neighborhood_mask, coupling, beta_pairs, beta_unassigned, epsilon
-            )
-            inner_iter += 1
-        epsilon /= theta
+    while True:
+        beta_pairs = np.zeros((num_X, num_Y), dtype=np.float64)
+        beta_unassigned = np.zeros(num_Y, dtype=np.float64)
+        coupling = np.zeros((num_X, num_Y), dtype=np.int32)
+        
+        # Abfangen von leeren Masken durch Fallback
+        valid_costs = cost_matrix[neighborhood_mask]
+        C = np.max(valid_costs) - np.min(valid_costs) if len(valid_costs) > 0 else 1.0
+        epsilon = C / 4.0 if C != 0 else 1.0
+        target_epsilon = (1.0 / num_X) - 1e-5
+        
+        # Echte unbeschränkte epsilon-Skalierungsschleife
+        alpha_prime_tracker = np.zeros(num_X)
+        while epsilon > target_epsilon:
+            total_mass_X = np.sum(mu_X)
+            while np.sum(coupling) < total_mass_X:
+                coupling, beta_pairs, beta_unassigned, alpha_prime_tracker = ot_auction_round_core(
+                    mu_X, mu_Y, cost_matrix, neighborhood_mask, coupling, beta_pairs, beta_unassigned, epsilon
+                )
+            epsilon /= theta
             
-    beta_global = np.zeros(num_Y)
-    for y in range(num_Y):
-        if np.sum(coupling[:, y]) == mu_Y[y]:
-            active_costs = [beta_pairs[x, y] for x in range(num_X) if coupling[x, y] > 0]
-            beta_global[y] = max(active_costs) if active_costs else beta_unassigned[y]
-        else:
-            beta_global[y] = beta_unassigned[y]
-            
-    return coupling, beta_global
+        # Wenn vollständig zugewiesen, folgt die hierarchische Konsistenzprüfung
+        mask_extended = hierarchical_consistency_check_ot(
+            cost_matrix, neighborhood_mask, alpha_prime_tracker, coupling, beta_pairs, beta_unassigned, mu_Y, part_X, part_Y
+        )
+        
+        # Wenn die Maske erweitert wurde, erzwingt das Paper ein erneutes Lösen der aktuellen Skala
+        if not mask_extended:
+            return coupling, neighborhood_mask
 
 
-def hybrid_optimal_transport_auction(mu_X, mu_Y, cost_matrix, initial_sparse_mask, theta=4.0):
+# =====================================================================
+# PART 4: TRUE MULTISCALE ALGORITHM DRIVER (SS13 CORE COUPLING)
+# =====================================================================
+
+def hybrid_optimal_transport_auction(mu_X, mu_Y, cost_matrix, theta=4.0):
+    """
+    Das echte Multiscale-Verfahren (Sect. 4, SS13): Startet grob, löst vollständig, 
+    projiziert den Support nach unten und verfeinert sukzessive.
+    """
     num_X, num_Y = cost_matrix.shape
-    neighborhood_mask = initial_sparse_mask.copy()
-    
     part_X = HierarchicalPartition(num_X)
     part_Y = HierarchicalPartition(num_Y)
     
-    beta_pairs = np.zeros((num_X, num_Y), dtype=np.float64)
-    beta_unassigned = np.zeros(num_Y, dtype=np.float64)
-    coupling = np.zeros((num_X, num_Y), dtype=np.int32)
+    # Wir starten auf der gröbsten Generation (depth - 1)
+    coarsest_gen = part_X.depth - 1
     
-    C = np.max(cost_matrix) - np.min(cost_matrix)
-    epsilon = C / 4.0 if C != 0 else 1.0
-    target_epsilon = (1.0 / num_X) - 1e-5
+    # Initiale Maske für die gröbste Skala ist voll besetzt (Dense)
+    current_sparse_mask = np.ones((num_X, num_Y), dtype=bool)
     
-    while epsilon > target_epsilon:
-        inner_iter = 0
-        while np.sum(coupling) < np.sum(mu_X) and inner_iter < 200:
-            coupling, beta_pairs, beta_unassigned, alpha_prime = ot_auction_round_core(
-                mu_X, mu_Y, cost_matrix, neighborhood_mask, coupling, beta_pairs, beta_unassigned, epsilon
+    # Schleife von der gröbsten Stufe hinab zur feinsten nativen Stufe (Generation 0)
+    for gen in range(coarsest_gen, -1, -1):
+        if gen > 0:
+            # Aggregation der Massen für die gröbere Darstellung
+            cells_X = part_X.hierarchy[gen]
+            cells_Y = part_Y.hierarchy[gen]
+            unique_cells_X = np.unique(cells_X)
+            unique_cells_Y = np.unique(cells_Y)
+            
+            mu_X_coarse = np.array([np.sum(mu_X[cells_X == c]) for c in unique_cells_X], dtype=np.int32)
+            mu_Y_coarse = np.array([np.sum(mu_Y[cells_Y == c]) for c in unique_cells_Y], dtype=np.int32)
+            
+            # Berechnen der reduzierten hierarchischen Kostenmatrix c_hat
+            cost_coarse = np.zeros((len(unique_cells_X), len(unique_cells_Y)))
+            for i, ca in enumerate(unique_cells_X):
+                for j, cb in enumerate(unique_cells_Y):
+                    cost_coarse[i, j] = compute_extended_cost(cost_matrix, part_X, part_Y, gen, ca, cb)
+            
+            # Zuordnung der aktuellen Maske auf die komprimierte Dimension
+            mask_coarse = np.zeros_like(cost_coarse, dtype=bool)
+            for i, ca in enumerate(unique_cells_X):
+                for j, cb in enumerate(unique_cells_Y):
+                    elements_a = part_X.get_elements_in_cell(gen, ca)
+                    elements_b = part_Y.get_elements_in_cell(gen, cb)
+                    mask_coarse[i, j] = np.any(current_sparse_mask[elements_a[:, None], elements_b])
+            
+            # Lösen des aggregierten Problems auf Stufe 'gen'
+            part_X_coarse = HierarchicalPartition(len(unique_cells_X))
+            part_Y_coarse = HierarchicalPartition(len(unique_cells_Y))
+            coupling_coarse, _ = solve_single_scale_auction(
+                mu_X_coarse, mu_Y_coarse, cost_coarse, mask_coarse, part_X_coarse, part_Y_coarse, theta
             )
             
-            beta_global = np.zeros(num_Y)
-            for y in range(num_Y):
-                if np.sum(coupling[:, y]) == mu_Y[y]:
-                    active_costs = [beta_pairs[x, y] for x in range(num_X) if coupling[x, y] > 0]
-                    beta_global[y] = max(active_costs) if active_costs else beta_unassigned[y]
-                else:
-                    beta_global[y] = beta_unassigned[y]
-            
-            violated_bidders = hierarchical_consistency_check(
-                cost_matrix, neighborhood_mask, alpha_prime, beta_global, part_X, part_Y
+            # Projektion des optimalen Supports auf die nächstfeinere Ebene (Gleichung 16 ff.)
+            current_sparse_mask = np.zeros((num_X, num_Y), dtype=bool)
+            active_coarse_pairs = np.argwhere(coupling_coarse > 0)
+            for ca_idx, cb_idx in active_coarse_pairs:
+                ca = unique_cells_X[ca_idx]
+                cb = unique_cells_Y[cb_idx]
+                elements_a = part_X.get_elements_in_cell(gen, ca)
+                elements_b = part_Y.get_elements_in_cell(gen, cb)
+                current_sparse_mask[elements_a[:, None], elements_b] = True
+        else:
+            # Native feinste Ebene (Generation 0): Endgültiger Durchlauf
+            final_coupling, _ = solve_single_scale_auction(
+                mu_X, mu_Y, cost_matrix, current_sparse_mask, part_X, part_Y, theta
             )
-            
-            if violated_bidders:
-                coupling, beta_pairs, beta_unassigned, _ = ot_auction_round_core(
-                    mu_X, mu_Y, cost_matrix, neighborhood_mask, coupling, 
-                    beta_pairs, beta_unassigned, epsilon, force_bidders=list(violated_bidders)
-                )
-            inner_iter += 1
-            
-        epsilon /= theta
-        
-    return coupling, beta_global
+            return final_coupling
+
+
+def strict_optimal_transport_auction(mu_X, mu_Y, cost_matrix, theta=4.0):
+    """ Standard-Referenzlöser auf nativer Ebene ohne Multiscale-Struktur """
+    num_X, num_Y = cost_matrix.shape
+    full_mask = np.ones((num_X, num_Y), dtype=bool)
+    part_X = HierarchicalPartition(num_X)
+    part_Y = HierarchicalPartition(num_Y)
+    coupling, _ = solve_single_scale_auction(mu_X, mu_Y, cost_matrix, full_mask, part_X, part_Y, theta)
+    return coupling
+
+
+# =====================================================================
+# PART 5: HIGH-SCALE DATA GENERATION & POT BENCHMARKING
+# =====================================================================
 
 if __name__ == "__main__":
     N = 128  
     print(f"Setting up high-scale scenario. N = {N} ({N*N} variations)...")
     
-    np.random.seed(36)
+    np.random.seed(42)
     mu_X = np.random.randint(5, 15, size=N, dtype=np.int32)
     mu_Y = np.random.randint(5, 15, size=N, dtype=np.int32)
     
@@ -256,40 +345,42 @@ if __name__ == "__main__":
     print("Computing cost matrix...")
     cost_matrix = np.sum((x_coords[:, None, :] - y_coords[None, :, :])**2, axis=-1)
 
-print("\n[POT] Running highly optimized C++ solver backend...")
-a, b = mu_X.astype(np.float64) / mu_X.sum(), mu_Y.astype(np.float64) / mu_Y.sum()
+    # -------------------------------------------------------------
+    # Method 1: POT Solver Backend
+    # -------------------------------------------------------------
+    if POT_AVAILABLE:
+        print("\n[POT] Running highly optimized C++ solver backend...")
+        a, b = mu_X.astype(np.float64) / mu_X.sum(), mu_Y.astype(np.float64) / mu_Y.sum()
+        
+        start_pot = time.perf_counter()
+        pot_plan = ot.emd(a, b, cost_matrix)
+        end_pot = time.perf_counter()
+        
+        print(f"--> POT completed in {end_pot - start_pot:.5f} seconds!")
 
-start_pot = time.perf_counter()
-pot_plan = ot.emd(a, b, cost_matrix)
-end_pot = time.perf_counter()
-
-print(f"--> POT completed in {end_pot - start_pot:.5f} seconds!")
-
+    # -------------------------------------------------------------
+    # Method 2: Standard Dense Auction 
+    # -------------------------------------------------------------
     print("\n[Standard] Running Dense Solver Algorithm...")
-    full_mask = np.ones((N, N), dtype=bool)
-    
     start_std = time.perf_counter()
-    coupling_std, _ = strict_optimal_transport_auction(mu_X, mu_Y, cost_matrix, full_mask)
+    coupling_std = strict_optimal_transport_auction(mu_X, mu_Y, cost_matrix)
     end_std = time.perf_counter()
     time_std = end_std - start_std
     print(f"--> Standard completed in {time_std:.5f} seconds.")
-    
-    print("\n[Hybrid] Running Sparse Hierarchical Algorithm...")
-    sparse_mask = np.zeros((N, N), dtype=bool)
-    for i in range(N):
-        sparse_mask[i, max(0, i-4):min(N, i+5)] = True
 
+    # -------------------------------------------------------------
+    # Method 3: Hierarchical Hybrid Solver (CORRECTED MULTISCALE)
+    # -------------------------------------------------------------
+    print("\n[Hybrid] Running Pure Sparse Hierarchical Multiscale Algorithm...")
     start_hyb = time.perf_counter()
-    coupling_hyb, _ = hybrid_optimal_transport_auction(mu_X, mu_Y, cost_matrix, sparse_mask)
+    coupling_hyb = hybrid_optimal_transport_auction(mu_X, mu_Y, cost_matrix)
     end_hyb = time.perf_counter()
     time_hyb = end_hyb - start_hyb
     print(f"--> Hybrid completed in {time_hyb:.5f} seconds.")
 
-
-
-
-
-    
+    # -------------------------------------------------------------
+    # Final Report
+    # -------------------------------------------------------------
     print("\n" + "="*50)
     print("                FINAL COMPARISON REPORT")
     print("="*50)
