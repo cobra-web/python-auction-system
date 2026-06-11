@@ -2,19 +2,16 @@ import numpy as np
 import time
 from collections import defaultdict
 
-# ==========================================
-# 1. Standard Dense Auction Algorithm
-# ==========================================
+# Standard Dense Auction Algorithm
 def standard_auction_dense(X, Y, epsilon=0.01):
     """
     Standard Auction Algorithm operating on a dense cost matrix.
     Matches the baseline un-accelerated approach.
     """
     N = len(X)
-    # Precompute dense squared Euclidean cost matrix
     cost_matrix = np.sum((X[:, None, :] - Y[None, :, :]) ** 2, axis=-1)
     
-    S = {} # Map Y -> X
+    S = {} 
     unassigned_x = set(range(N))
     beta = np.zeros(N)
     
@@ -25,7 +22,6 @@ def standard_auction_dense(X, Y, epsilon=0.01):
         for x in unassigned_x:
             eff_costs = cost_matrix[x, :] - beta
             
-            # Find best and second best
             partitioned_idx = np.argpartition(eff_costs, 1)
             best_y = partitioned_idx[0]
             second_best_y = partitioned_idx[1]
@@ -50,9 +46,8 @@ def standard_auction_dense(X, Y, epsilon=0.01):
                 
     return S, cost_matrix
 
-# ==========================================
-# 2. Hierarchical Hybrid Auction Algorithm
-# ==========================================
+# Hierarchical Hybrid Auction Algorithm
+
 class HierarchicalHybridAuction:
     def __init__(self, X, Y, scales, epsilon=0.01):
         self.X = X
@@ -68,7 +63,6 @@ class HierarchicalHybridAuction:
         
         self.cost_dense = np.sum((X[:, None, :] - Y[None, :, :]) ** 2, axis=-1)
         
-        # Initialize sparse neighborhood N_hat with 5 nearest neighbors
         self.N_hat = defaultdict(list)
         for i in range(self.N):
             nearest = np.argsort(self.cost_dense[i])[:5]
@@ -184,14 +178,11 @@ class HierarchicalHybridAuction:
                     break
         return children
 
-# ==========================================
-# 3. Benchmark Runner
-# ==========================================
+# Benchmark Runner
 def calculate_total_cost(assignment, cost_matrix):
     return sum(cost_matrix[x, y] for y, x in assignment.items())
 
 def run_benchmark():
-    # Test on progressively larger point clouds
     problem_sizes = [250, 500, 1000]
     np.random.seed(42)
     
@@ -202,13 +193,13 @@ def run_benchmark():
         X = np.random.rand(N, 2)
         Y = np.random.rand(N, 2)
         
-        # 1. Run Standard Dense
+        #Run Standard Dense
         t0 = time.time()
         assignment_dense, cost_matrix = standard_auction_dense(X, Y, epsilon=0.005)
         time_dense = time.time() - t0
         cost_dense = calculate_total_cost(assignment_dense, cost_matrix)
         
-        # 2. Run Hierarchical Hybrid
+        #Run Hierarchical Hybrid
         scales = [2, 4, 8, 16]
         auction_hybrid = HierarchicalHybridAuction(X, Y, scales=scales, epsilon=0.005)
         
@@ -217,7 +208,7 @@ def run_benchmark():
         time_hybrid = time.time() - t1
         cost_hybrid = calculate_total_cost(assignment_hybrid, cost_matrix)
         
-        # Calculate active pairs used by hybrid
+        #Calculates active pairs used by hybrid
         active_pairs = sum(len(neighbors) for neighbors in auction_hybrid.N_hat.values())
         max_pairs = N * N
         sparsity_str = f"{active_pairs}/{max_pairs}"
