@@ -5,7 +5,6 @@ from typing import Dict, List, Tuple, Callable, Set
 class Node:
     id: int
     total_mass: int
-    # Tracks how much mass is currently assigned to/from this node
     assigned_mass: int = 0
     
     @property
@@ -18,13 +17,10 @@ class OTSolverState:
         self.Y = Y_nodes
         self.c = cost_matrix
         
-        # \mu(x, y): Tracks the actual mass assigned between x and y
         self.mu: Dict[Tuple[int, int], int] = {}
         
-        # \beta(x, y): Dual variable for specific assigned pairs
         self.beta_xy: Dict[Tuple[int, int], float] = {}
         
-        # \beta(\oslash, y): Dual variable for unassigned mass atoms at y
         self.beta_empty: Dict[int, float] = {y: 0.0 for y in self.Y}
 
     def get_mu(self, x: int, y: int) -> int:
@@ -33,21 +29,19 @@ class OTSolverState:
 @dataclass
 class PiEntry:
     target_y: int
-    current_owner_x: int  # None represents the empty \oslash state
-    net_cost: float       # c(x, y) - \beta(x', y)  OR  c(x,y) - \beta(\oslash, y)
-    available_mass: int   # How much mass can be taken from this specific entry
+    current_owner_x: int  
+    net_cost: float      
+    available_mass: int 
 
 def build_pi_x(state: OTSolverState, x: Node) -> List[PiEntry]:
     pi_x = []
     
     for y_id, y_node in state.Y.items():
-        # Only consider neighbors where a cost exists (c(x, y) < infinity)
         if (x.id, y_id) not in state.c:
             continue
             
         c_xy = state.c[(x.id, y_id)]
         
-        # Part 1: Consider unassigned mass at y (the \oslash condition)
         if y_node.unassigned_mass > 0:
             net_cost = c_xy - state.beta_empty[y_id]
             pi_x.append(PiEntry(
@@ -57,8 +51,6 @@ def build_pi_x(state: OTSolverState, x: Node) -> List[PiEntry]:
                 available_mass=y_node.unassigned_mass
             ))
             
-        # Part 2: Consider mass at y currently owned by other nodes x'
-        # We look for x' != x where \mu(x', y) > 0
         for (x_prime_id, dest_y_id), assigned_mass in state.mu.items():
             if dest_y_id == y_id and x_prime_id != x.id and assigned_mass > 0:
                 beta_x_prime_y = state.beta_xy.get((x_prime_id, y_id), 0.0)
@@ -71,7 +63,6 @@ def build_pi_x(state: OTSolverState, x: Node) -> List[PiEntry]:
                     available_mass=assigned_mass
                 ))
                 
-    # Sort ascending by net_cost as per Equation 11
     pi_x.sort(key=lambda entry: entry.net_cost)
     return pi_x
 
@@ -122,5 +113,3 @@ def determine_m_and_bids(state: OTSolverState, x: Node, epsilon: float):
             break
             
     return bids, alpha_prime_x
-
-# --- QuadTree and Remaining logic would follow same cleaning pattern ---
