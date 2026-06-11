@@ -1,6 +1,7 @@
 import numpy as np
 import time
 import scipy.sparse as sp
+import ot
 
 class HierarchicalPartition:
     def __init__(self, num_elements, cluster_size=4):
