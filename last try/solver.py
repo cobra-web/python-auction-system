@@ -1,5 +1,5 @@
-from typing import Callable, Set, Tuple
-from models import OTSolverState, QuadTree
+from typing import Callable, Set, Tuple, List
+from models import OTSolverState, QuadTree, Point
 from auction_logic import run_hybrid_auction_step
 
 class HierarchicalOptimalTransportSolver:
@@ -28,3 +28,12 @@ class HierarchicalOptimalTransportSolver:
             
     def _project_support_to_next_scale(self, state):
         self.active_N = set(state.mu.keys())
+
+    # THESE ARE NOW CORRECTLY INDENTED INSIDE THE CLASS
+    def _get_generations_ordered(self) -> List[int]:
+        g = 3 
+        return list(range(g, -1, -1))
+
+    def _get_full_domain_neighborhood(self) -> Set[Tuple[int, int]]:
+        return {(x.id, y.id) for x in self.qt_X.root.get_all_points() 
+                           for y in self.qt_Y.root.get_all_points()}
