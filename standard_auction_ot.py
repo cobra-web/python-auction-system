@@ -79,41 +79,38 @@ def build_pi_x(state: OTSolverState, x: Node) -> List[PiEntry]:
 
 
 def determine_m_and_bids(state: OTSolverState, x: Node, epsilon: float):
-    # Only unassigned mass searches for bids
-    mass_to_assign = x.unassigned_mass
+    mass_to_assign = int(x.unassigned_mass)
     if mass_to_assign <= 0:
         return []
         
     pi_x = build_pi_x(state, x)
     if not pi_x:
-        return [] # Problem is infeasible if no targets exist
+        return [] 
         
     accumulated_mass = 0
     m_index = 0
     
-    # Find the integer m where accumulated mass meets or exceeds what x needs
     for i, entry in enumerate(pi_x):
-        accumulated_mass += entry.available_mass
+        accumulated_mass += int(entry.available_mass)
         if accumulated_mass >= mass_to_assign:
             m_index = i
             break
             
-    # Equation 12: The price of the next best alternative (m-th entry)
-    # If we run out of entries before fulfilling mass, we use the last available entry
-    # (Though in a perfectly balanced/feasible OT problem, this boundary case won't occur)
-    m_index_for_alpha = min(m_index + 1, len(pi_x) - 1) if len(pi_x) > 1 else 0
-    alpha_prime_x = pi_x[m_index_for_alpha].net_cost
+    if accumulated_mass < mass_to_assign:
+        alpha_prime_x = float('inf')
+    else:
+        m_index_for_alpha = m_index + 1 if (m_index + 1) < len(pi_x) else m_index
+        alpha_prime_x = pi_x[m_index_for_alpha].net_cost
     
-    # Generate the actual bids for the items up to index m
     bids = []
     mass_left_to_bid = mass_to_assign
     
-    for i in range(m_index + 1):
+    bound_index = m_index + 1 if accumulated_mass >= mass_to_assign else len(pi_x)
+    for i in range(bound_index):
         entry = pi_x[i]
-        mass_for_this_bid = min(mass_left_to_bid, entry.available_mass)
+        mass_for_this_bid = min(mass_left_to_bid, int(entry.available_mass))
         
-        # Bid value is based on the second-best price logic of the auction algorithm
-        bid_value = state.c[(x.id, entry.target_y)] - alpha_prime_x - epsilon
+        bid_value = float('-inf') if alpha_prime_x == float('inf') else (state.c[(x.id, entry.target_y)] - alpha_prime_x - epsilon)
         
         bids.append({
             'source_x': x.id,
