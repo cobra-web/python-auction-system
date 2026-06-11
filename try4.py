@@ -2,19 +2,8 @@ import numpy as np
 import time
 import scipy.sparse as sp
 
-# Try importing the POT package (it is called 'ot' in code)
-try:
-    import ot
-    POT_AVAILABLE = True
-except ImportError:
-    POT_AVAILABLE = False
-
-# =====================================================================
-# PART 1: SHARED DATA UTILITIES & HIERARCHICAL STRUCTURES
-# =====================================================================
-
 class HierarchicalPartition:
-    def __init__(self, num_elements, cluster_size=4): # Slightly larger clusters for big N
+    def __init__(self, num_elements, cluster_size=4):
         self.num_elements = num_elements
         self.hierarchy = []
         
@@ -37,7 +26,7 @@ class HierarchicalPartition:
 def compute_extended_cost(cost_matrix, part_X, part_Y, gen_idx, cell_a, cell_b):
     elements_a = part_X.get_elements_in_cell(gen_idx, cell_a)
     elements_b = part_Y.get_elements_in_cell(gen_idx, cell_b)
-    # Optimized sub-block computation
+
     return np.min(cost_matrix[elements_a[:, None], elements_b])
 
 
@@ -75,11 +64,6 @@ def hierarchical_consistency_check(cost_matrix, neighborhood_mask, alpha_prime, 
             
     return rebidding_list
 
-
-# =====================================================================
-# PART 2: THE AUCTION CORE ENGINE (Vectorized for Speed)
-# =====================================================================
-
 def ot_auction_round_core(mu_X, mu_Y, cost_matrix, neighborhood_mask, coupling, 
                             beta_pairs, beta_unassigned, epsilon, force_bidders=None):
     num_X, num_Y = cost_matrix.shape
@@ -87,7 +71,6 @@ def ot_auction_round_core(mu_X, mu_Y, cost_matrix, neighborhood_mask, coupling,
     total_assigned_Y = np.sum(coupling, axis=0)
     rem_mu_Y = mu_Y - total_assigned_Y
     
-    # Using dynamic non-zero lookup for memory scaling
     bids_received = {y: [] for y in range(num_Y)}
     alpha_prime_tracker = np.zeros(num_X)
     
@@ -96,14 +79,12 @@ def ot_auction_round_core(mu_X, mu_Y, cost_matrix, neighborhood_mask, coupling,
     for x in bidders:
         if rem_mu_X[x] <= 0:
             continue
-        # Check coordinates only inside the permitted sparse matrix structures
         x_neighbors = np.where(neighborhood_mask[x, :])[0]
         if len(x_neighbors) == 0:
             continue
         
         pi_list = []
         for y in x_neighbors:
-            # Fast tracking active allocations without inner loops
             active_x_primes = np.where(coupling[:, y] > 0)[0]
             for x_prime in active_x_primes:
                 if x_prime != x:
@@ -181,11 +162,6 @@ def ot_auction_round_core(mu_X, mu_Y, cost_matrix, neighborhood_mask, coupling,
 
     return coupling, beta_pairs, beta_unassigned, alpha_prime_tracker
 
-
-# =====================================================================
-# PART 3: ALGORITHM DRIVERS
-# =====================================================================
-
 def strict_optimal_transport_auction(mu_X, mu_Y, cost_matrix, neighborhood_mask, theta=4.0):
     num_X, num_Y = cost_matrix.shape
     beta_pairs = np.zeros((num_X, num_Y), dtype=np.float64)
@@ -198,7 +174,7 @@ def strict_optimal_transport_auction(mu_X, mu_Y, cost_matrix, neighborhood_mask,
     
     while epsilon > target_epsilon:
         inner_iter = 0
-        while np.sum(coupling) < np.sum(mu_X) and inner_iter < 200: # Iteration cap for safe scaling comparisons
+        while np.sum(coupling) < np.sum(mu_X) and inner_iter < 200:
             coupling, beta_pairs, beta_unassigned, _ = ot_auction_round_core(
                 mu_X, mu_Y, cost_matrix, neighborhood_mask, coupling, beta_pairs, beta_unassigned, epsilon
             )
@@ -261,41 +237,26 @@ def hybrid_optimal_transport_auction(mu_X, mu_Y, cost_matrix, initial_sparse_mas
         
     return coupling, beta_global
 
-
-# =====================================================================
-# PART 4: HIGH-SCALE DATA GENERATION & POT BENCHMARKING
-# =====================================================================
-
 if __name__ == "__main__":
-    # --- CHOOSE YOUR PROBLEM SIZE HERE ---
-    # Tip: Start at 100 or 200. Pure Python implementations are slow, 
-    # but the POT solver can easily scale all the way to 6000+.
     N = 128  
     print(f"Setting up high-scale scenario. N = {N} ({N*N} variations)...")
     
-    np.random.seed(42)
+    np.random.seed(36)
     mu_X = np.random.randint(5, 15, size=N, dtype=np.int32)
     mu_Y = np.random.randint(5, 15, size=N, dtype=np.int32)
     
-    # Balanced condition configuration
     diff = np.sum(mu_X) - np.sum(mu_Y)
     if diff > 0: mu_Y[0] += diff
     else: mu_X[0] -= diff
 
-    # Creating coordinate space (P2H Square variant from the paper)
     x_coords = np.random.uniform(0, 10, size=(N, 2))
     y_coords = np.random.uniform(0, 10, size=(N, 2))
     
-    # Compute Cost Matrix (Squared Euclidean Distances)
     print("Computing cost matrix...")
     cost_matrix = np.sum((x_coords[:, None, :] - y_coords[None, :, :])**2, axis=-1)
 
-    # -------------------------------------------------------------
-    # Method 1: POT (Python Optimal Transport Package) Benchmark
-    # -------------------------------------------------------------
     if POT_AVAILABLE:
         print("\n[POT] Running highly optimized C++ solver backend...")
-        # Normalize distributions to probabilities for standard POT EMD function
         a, b = mu_X.astype(np.float64) / mu_X.sum(), mu_Y.astype(np.float64) / mu_Y.sum()
         
         start_pot = time.perf_counter()
@@ -306,9 +267,6 @@ if __name__ == "__main__":
     else:
         print("\nPOT package not installed. Skipping. (Install via: pip install POT)")
 
-    # -------------------------------------------------------------
-    # Method 2: Standard Auction (Your Architecture)
-    # -------------------------------------------------------------
     print("\n[Standard] Running Dense Solver Algorithm...")
     full_mask = np.ones((N, N), dtype=bool)
     
@@ -317,12 +275,8 @@ if __name__ == "__main__":
     end_std = time.perf_counter()
     time_std = end_std - start_std
     print(f"--> Standard completed in {time_std:.5f} seconds.")
-
-    # -------------------------------------------------------------
-    # Method 3: Hierarchical Hybrid Solver
-    # -------------------------------------------------------------
+    
     print("\n[Hybrid] Running Sparse Hierarchical Algorithm...")
-    # Initialize with a tight bounding local mask to save processing tasks
     sparse_mask = np.zeros((N, N), dtype=bool)
     for i in range(N):
         sparse_mask[i, max(0, i-4):min(N, i+5)] = True
@@ -333,9 +287,11 @@ if __name__ == "__main__":
     time_hyb = end_hyb - start_hyb
     print(f"--> Hybrid completed in {time_hyb:.5f} seconds.")
 
-    # -------------------------------------------------------------
-    # Final Report
-    # -------------------------------------------------------------
+
+
+
+
+    
     print("\n" + "="*50)
     print("                FINAL COMPARISON REPORT")
     print("="*50)
