@@ -2,37 +2,27 @@ import numpy as np
 
 class HierarchicalOTAuction:
     def __init__(self, mu_X, mu_Y, cost_matrix, eps_start=1.0, eps_target=1e-4, eps_factor=0.2):
-        """
-        mu_X: 1D numpy array of source mass distribution (size |X|)
-        mu_Y: 1D numpy array of target mass distribution (size |Y|)
-        cost_matrix: 2D numpy array of costs c(x, y)
-        eps_... : Parameters for epsilon scaling
-        """
         self.mu_X = mu_X
         self.mu_Y = mu_Y
         self.c = cost_matrix
         self.X_len, self.Y_len = cost_matrix.shape
         
-        # Epsilon scaling parameters
+        #e-scaling parameters
         self.eps = eps_start
         self.eps_target = eps_target
         self.eps_factor = eps_factor
         
-        # OT State Variables
-        self.mu = np.zeros((self.X_len, self.Y_len)) # Coupling matrix mu(x,y)
+        # OT Variables
+        self.mu = np.zeros((self.X_len, self.Y_len)) # coupling matrix mu(x,y)
         self.beta_empty = np.zeros(self.Y_len)       # beta(empty, y) for unassigned mass
         self.beta_xy = np.zeros((self.X_len, self.Y_len)) # beta(x', y) for assigned mass
         
         self.alpha_prime = np.full(self.X_len, np.inf)
         
-        # Sparse neighborhood initialization (could be a heuristic in practice)
+        # Sparse neighborhood initialization
         self.N_hat = set()
         
     def get_beta(self, y):
-        """
-        Calculates the effective dual variable beta(y) based on assigned mass.
-        """
-        # "beta(y) = max beta(x', y) if sum(mu(x', y)) == mu_Y(y) else beta(empty, y)"
         assigned_mass = np.sum(self.mu[:, y])
         if np.isclose(assigned_mass, self.mu_Y[y]):
             # Sink is full, return the max beta of elements currently assigned to it
@@ -42,9 +32,6 @@ class HierarchicalOTAuction:
         
         return self.beta_empty[y]
 
-    # ----------------------------------------------------
-    # HIERARCHICAL INTERFACES (Stubs for the user to define tree logic)
-    # ----------------------------------------------------
     def hat_c(self, a, b): pass
     def hat_beta(self, b): pass
     def hat_alpha_prime(self, a): pass
@@ -53,23 +40,17 @@ class HierarchicalOTAuction:
     def ch(self, node): return []
     def element(self, node): return node.value 
 
-    # ----------------------------------------------------
-    # CORE ALGORITHM
-    # ----------------------------------------------------
+
+    
     def build_Pi_list(self, x, N_x):
-        """
-        Constructs the ordered list Pi(x) of potential bid targets.
-        """
         Pi_x = []
         for y in N_x:
-            # Add bids against currently assigned mass
             assigned_x_indices = np.where(self.mu[:, y] > 0)[0]
             for x_prime in assigned_x_indices:
                 if x_prime != x:
                     val = self.c[x, y] - self.beta_xy[x_prime, y]
                     Pi_x.append((val, y, x_prime))
             
-            # Add bids against unassigned space in y
             assigned_mass = np.sum(self.mu[:, y])
             if assigned_mass < self.mu_Y[y]:
                 val = self.c[x, y] - self.beta_empty[y]
