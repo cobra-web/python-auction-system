@@ -1,12 +1,7 @@
 import numpy as np
 import time
 import scipy.sparse as sp
-
-try:
-    import ot
-    POT_AVAILABLE = True
-except ImportError:
-    POT_AVAILABLE = False
+import ot
 
 class HierarchicalPartition:
     def __init__(self, num_elements, cluster_size=4):
@@ -302,15 +297,14 @@ if __name__ == "__main__":
     print("Computing cost matrix...")
     cost_matrix = np.sum((x_coords[:, None, :] - y_coords[None, :, :])**2, axis=-1)
 
-    if POT_AVAILABLE:
-        print("\n[POT] Running highly optimized C++ solver backend...")
-        a, b = mu_X.astype(np.float64) / mu_X.sum(), mu_Y.astype(np.float64) / mu_Y.sum()
-        
-        start_pot = time.perf_counter()
-        pot_plan = ot.emd(a, b, cost_matrix)
-        end_pot = time.perf_counter()
-        
-        print(f"--> POT completed in {end_pot - start_pot:.5f} seconds!")
+    print("\n[POT] Running highly optimized C++ solver backend...")
+    a, b = mu_X.astype(np.float64) / mu_X.sum(), mu_Y.astype(np.float64) / mu_Y.sum()
+
+    start_pot = time.perf_counter()
+    pot_plan = ot.emd(a, b, cost_matrix)
+    end_pot = time.perf_counter()
+
+    print(f"--> POT completed in {end_pot - start_pot:.5f} seconds!")
 
     print("\n[Standard] Running Dense Solver Algorithm...")
     start_std = time.perf_counter()
