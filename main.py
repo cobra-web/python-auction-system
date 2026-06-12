@@ -4,10 +4,6 @@ from collections import defaultdict
 
 # Standard Dense Auction Algorithm
 def standard_auction_dense(X, Y, epsilon=0.01):
-    """
-    Standard Auction Algorithm operating on a dense cost matrix.
-    Matches the baseline un-accelerated approach.
-    """
     N = len(X)
     cost_matrix = np.sum((X[:, None, :] - Y[None, :, :]) ** 2, axis=-1)
     
@@ -47,7 +43,6 @@ def standard_auction_dense(X, Y, epsilon=0.01):
     return S, cost_matrix
 
 # Hierarchical Hybrid Auction Algorithm
-
 class HierarchicalHybridAuction:
     def __init__(self, X, Y, scales, epsilon=0.01):
         self.X = X
