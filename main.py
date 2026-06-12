@@ -179,7 +179,7 @@ def calculate_total_cost(assignment, cost_matrix):
 
 def run_benchmark():
     problem_sizes = [250, 500, 1000]
-    np.random.seed(42)
+    np.random.seed(50)
     
     print(f"{'N':<6} | {'Dense Time (s)':<15} | {'Hybrid Time (s)':<15} | {'Dense Cost':<12} | {'Hybrid Cost':<12} | {'Active Pairs':<15}")
     print("-" * 85)
