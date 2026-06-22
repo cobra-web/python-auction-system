@@ -1,10 +1,10 @@
+from src.core.ot_auction import AuctionOT
+from src.utils.eps_scaling import EpsScalingManager
+from src.hierarchical.consistency import ConsistencyChecker
 import numpy as np
 
+
 class HierarchicalMultiscaleSolver:
-    """
-    Executes the Hierarchical Multiscale scheme detailed in Section 4 of 
-    Schmitzer & Schnörr (2013).
-    """
     def __init__(self, tree_X, tree_Y, cost_matrix, mu_X, mu_Y):
         self.tree_X = tree_X
         self.tree_Y = tree_Y
@@ -75,25 +75,28 @@ class HierarchicalMultiscaleSolver:
                             
         return list(N_fine_guess)
 
+    # --- 2. THE NEW SOLVE METHOD REPLACES THE OLD ONE ENTIRELY ---
     def solve(self, start_generation):
         """
-        The master multiscale loop.
-        Starts at a coarse scale, solves densely, and recursively refines down to gen 0.
+        The master multiscale loop in perfect harmony.
+        Starts at a coarse scale, solves densely (WITH e-scaling), 
+        and recursively refines down to gen 0.
         """
         print(f"Starting Multiscale Solve at Coarse Generation {start_generation}")
         
-        # 1. Direct dense solution at the coarsest scale
+        # Direct dense solution at the coarsest scale
         C_coarse, mu_X_coarse, mu_Y_coarse = self._build_coarsened_problem(start_generation)
         
-        # Note: You would initialize your AuctionOT solver here, telling it to 
-        # run densely because no N_allowed subset is passed.
-        # auction = AuctionOT(C_coarse, mu_X_coarse, mu_Y_coarse)
-        # current_mu, _, _ = auction.solve()
+        # HARMONY POINT 1: Use the EpsScalingManager for the dense coarse solve
+        coarse_manager = EpsScalingManager(
+            AuctionOT, 
+            C_coarse, 
+            mu_X=mu_X_coarse, 
+            mu_Y=mu_Y_coarse
+        )
+        current_mu, _, _ = coarse_manager.solve()
         
-        # Placeholder for the dense solution matrix 
-        current_mu = np.ones_like(C_coarse) # Replace with actual dense auction solve
-        
-        # 2. Recursively solve at finer scales
+        # Recursively solve at finer scales
         for gen in range(start_generation - 1, -1, -1):
             print(f"Refining to Generation {gen}...")
             
@@ -103,29 +106,19 @@ class HierarchicalMultiscaleSolver:
             # Build the specific problem for this generation
             C_gen, mu_X_gen, mu_Y_gen = self._build_coarsened_problem(gen)
             
-            # --- THE HYBRID AUCTION ALGORITHM ---
-            # Here, you run the auction constrained ONLY to N_guess.
-            # 
-            # while not assigned:
-            #     bids = sparse_bidding_phase(unassigned, N_guess)
-            #     
-            #     # Intercept with Consistency Checker!
-            #     checker = ConsistencyChecker(self.tree_X, self.tree_Y, C_gen, N_guess)
-            #     violated_x = checker.run_consistency_check(alpha_prime, beta, start_gen=gen)
-            #     
-            #     if violated_x:
-            #         # Update N_guess with the newly discovered edges
-            #         N_guess.update(checker.N_set)
-            #         # Re-bid for the violated x's using the expanded N_guess
-            #         bids.update(rebid_phase(violated_x, N_guess))
-            #
-            #     sparse_assignment_phase(bids)
+            # HARMONY POINT 2: Wrap the Hybrid execution in the scaling manager
+            hybrid_manager = EpsScalingManager(
+                AuctionOT, 
+                C_gen, 
+                mu_X=mu_X_gen, 
+                mu_Y=mu_Y_gen,
+                allowed_edges=N_guess,           
+                consistency_checker=ConsistencyChecker(self.tree_X, self.tree_Y, C_gen, N_guess) 
+            )
             
-            # Simulate the hybrid solver completing its task
-            # current_mu = hybrid_auction.solve(N_guess)
+            current_mu, _, _ = hybrid_manager.solve()
             
-            print(f"Generation {gen} solved. Sparse subset captured {len(N_guess)} edges.")
+            print(f"Generation {gen} solved. Sparse subset expanded as needed.")
             
         print("Finest scale (Generation 0) solved. Global optimality guaranteed.")
-        # At generation 0, current_mu perfectly matches the singletons (X and Y).
         return current_mu
