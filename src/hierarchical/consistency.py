@@ -1,10 +1,6 @@
 import numpy as np
 
 class ConsistencyChecker:
-    """
-    Executes the Hierarchical Consistency Check Phase as defined in Section 4.
-    Ensures global optimality while operating on a sparse neighborhood subset.
-    """
     def __init__(self, tree_X, tree_Y, cost_matrix, initial_sparse_N):
         self.tree_X = tree_X
         self.tree_Y = tree_Y
@@ -18,9 +14,7 @@ class ConsistencyChecker:
         self.beta_hat = {}
 
     def _compute_extensions(self, alpha_prime, beta):
-        """
-        Eq. 13: Computes \hat{\alpha}' and \hat{\beta} bottom-up from the leaves to the root.
-        """
+        #Eq 13
         # Propagate alpha_prime_hat up tree_X
         for gen in range(self.tree_X.g):
             for cell in self.tree_X.generations[gen]:
@@ -44,20 +38,12 @@ class ConsistencyChecker:
                     )
 
     def _c_hat(self, cell_a, cell_b):
-        """
-        Eq. 14: \hat{c}(a,b) = min_{x \in a, y \in b} c(x,y)
-        Note: For very large problems (scenario 'P2H-LB' in the paper), this explicit 
-        subgrid minimum should be replaced by bounding-box lower bounds to save time.
-        """
+        #Eq 14
         idx_a = cell_a.point_indices
         idx_b = cell_b.point_indices
         return np.min(self.C[np.ix_(idx_a, idx_b)])
 
     def run_consistency_check(self, alpha_prime, beta, start_gen=None):
-        """
-        Checks the inequalities. If violated, recursively dives finer.
-        Returns a list of 'x' elements that need to re-bid.
-        """
         self._compute_extensions(alpha_prime, beta)
         
         # Usually start checking at the coarsest level (root)
@@ -78,9 +64,6 @@ class ConsistencyChecker:
         return list(rebid_candidates)
 
     def _check_recursive(self, cell_a, cell_b):
-        """
-        The core recursive logic checking \hat{c} - \hat{\beta} >= \hat{\alpha}'
-        """
         c_hat_val = self._c_hat(cell_a, cell_b)
         a_prime_hat = self.alpha_prime_hat[cell_a.id]
         b_hat = self.beta_hat[cell_b.id]
