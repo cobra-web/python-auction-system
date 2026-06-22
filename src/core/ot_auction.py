@@ -1,7 +1,8 @@
 import numpy as np
+from src.utils.data_structures import SparseNeighborhood
 
 class AuctionOT:
-    def __init__(self, cost_matrix, mu_X, mu_Y, epsilon=None):
+    def __init__(self, cost_matrix, mu_X, mu_Y, epsilon=None, allowed_edges=None):
         self.C = np.array(cost_matrix, dtype=float)
         self.mu_X = np.array(mu_X, dtype=int)
         self.mu_Y = np.array(mu_Y, dtype=int)
@@ -49,8 +50,14 @@ class AuctionOT:
             # Construct the Pi(x) list (Eq. 10 & 11)
             # Contains tuples: (effective_cost, target_y, mass_available, occupied_by_x, current_beta)
             Pi_x = []
+
+            if self.sparse is not None:
+                valid_y_targets = self.sparse.get_allowed_y(x)
+            else:
+                valid_y_targets = range(self.N_Y) #Fallback to dense
             
-            for y in range(self.N_Y):
+            
+            for y in valid_y_targets:
                 for atom in self.y_atoms[y]:
                     x_prime = atom['x']
                     # Do not bid against our own mass atoms to prevent inefficient competition
