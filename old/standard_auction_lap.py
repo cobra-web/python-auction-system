@@ -1,5 +1,5 @@
 def hierarchical_auction_lap(X, Y, costs, epsilon):
-    S = {} 
+    S = {} #für y werte
     unassigned_x = list(X)
     
     beta = {y: 0.0 for y in Y}
