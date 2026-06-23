@@ -31,9 +31,17 @@ def run_hierarchical_benchmark(N=32):
         
     # 4. Construct the Quadtree structures
     print("Building spatial hierarchical partitions...")
-    tree_X = HierarchicalPartition(X_pts, g=5)
-    tree_Y = HierarchicalPartition(Y_pts, g=5)
-    print(f"Tree depth established: {tree_X.g} generations.")
+    tree_X = HierarchicalPartition(X_pts)
+    tree_Y = HierarchicalPartition(Y_pts)
+
+    #if no match, rebuild the shallower one
+    if tree_X.g != tree_Y.g:
+        target_gen = max(tree_X.g, tree_Y.g)
+        if tree_X.g < target_gen:
+            tree_X = HierarchicalPartition(X_pts, target_g=target_gen)
+        else:
+            tree_Y = HierarchicalPartition(Y_pts, target_g=target_gen)
+    print(f"Tree depth established and equalised: {tree_X.g} generations.")
     
     # --- RUN DENSE BASELINE ---
     print("\n[Executing Dense Baseline Solver...]")
