@@ -57,9 +57,14 @@ class HierarchicalMultiscaleSolver:
                 if mu_hat[i, j] > 0:
                     parent_a = cells_X_coarse[i]
                     parent_b = cells_Y_coarse[j]
-                    for child_a in parent_a.children:
-                        for child_b in parent_b.children:
-                            allowed_edges.append((cell_to_idx_X[child_a], cell_to_idx_Y[child_b]))
+
+                    children_a = parent_a.children if (parent_a.children and parent_a.children[0] in cell_to_idx_X) else [parent_a]
+                    children_b = parent_b.children if (parent_b.children and parent_b.children[0] in cell_to_idx_Y) else [parent_b]
+                    
+                    for child_a in children_a:
+                        for child_b in children_b:
+                            if child_a in cell_to_idx_X and child_b in cell_to_idx_Y:
+                                allowed_edges.append((cell_to_idx_X[child_a], cell_to_idx_Y[child_b]))
                             
         return allowed_edges
 
