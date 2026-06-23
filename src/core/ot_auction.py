@@ -21,6 +21,13 @@ class AuctionOT:
         for y in range(self.N_Y):
             self.y_atoms.append([{'x': -1, 'mass': self.mu_Y[y], 'beta': 0.0}])
 
+        if allowed_edges is not None:
+            self.sparse = SparseNeighborhood(self.N_X, self.N_Y, allowed_edges)
+        else:
+            self.sparse = None
+
+    
+
     def solve(self):
         iterations = 0
         while True:
