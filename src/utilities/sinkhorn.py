@@ -1,7 +1,7 @@
 import numpy as np
 from scipy.special import logsumexp
 
-def log_sinkhorn(cost_matrix, mu_X, mu_Y, gamma=0.01, max_iters=1000, tol=1e-5):
+def log_sinkhorn(cost_matrix, mu_X, mu_Y, gamma=0.05, max_iters=1000, tol=1e-5):
     """
     Log-domain stabilized Sinkhorn Algorithm for Entropy-Regularized OT.
     Solves: min <mu, C> + gamma * H(mu)
