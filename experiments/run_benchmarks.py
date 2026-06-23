@@ -7,7 +7,7 @@ from src.utils.eps_scaling import EpsScalingManager
 from src.core.ot_auction import AuctionOT
 from src.utils.sinkhorn import log_sinkhorn
 
-def run_comprehensive_benchmarks(N_sizes=[16, 32, 64, 128]):
+def run_comprehensive_benchmarks(N_sizes=[16, 32, 64, 128, 1000]):
     print("BACHELOR THESIS: OPTIMAL TRANSPORT SOLVER BENCHMARK")
     print(f"{'Scale (N)':<10} | {'Solver Type':<15} | {'Computed Cost':<14} | {'Runtime (s)':<12}")
     print("-" * 66)
