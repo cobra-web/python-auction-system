@@ -14,10 +14,7 @@ class HierarchicalMultiscaleSolver:
         self.g = self.tree_X.g
 
     def _build_coarsened_problem(self, gen):
-        """
-        Eq. 16: Constructs the coarsened Optimal Transport problem at generation 'n'.
-        Aggregates mass allocations and establishes the bounding costs.
-        """
+        """Eq. 16: Constructs the coarsened Optimal Transport problem at generation 'n'."""
         cells_X = self.tree_X.generations[gen]
         cells_Y = self.tree_Y.generations[gen]
         
@@ -43,10 +40,7 @@ class HierarchicalMultiscaleSolver:
         return C_hat, mu_X_hat, mu_Y_hat
 
     def _induce_sparse_neighborhood(self, mu_hat, gen_coarse):
-        """
-        Projects the active coupling supports down to the child cells 
-        at the next finer generation level. Fixes the KeyError tracking bug.
-        """
+        """Projects active coupling supports down to child cells at the next finer generation."""
         gen_fine = gen_coarse - 1
         cells_X_coarse = self.tree_X.generations[gen_coarse]
         cells_Y_coarse = self.tree_Y.generations[gen_coarse]
@@ -54,71 +48,75 @@ class HierarchicalMultiscaleSolver:
         cells_X_fine = self.tree_X.generations[gen_fine]
         cells_Y_fine = self.tree_Y.generations[gen_fine]
         
-        # Create an inverse lookup dictionary to map a child cell object 
-        # to its exact row/column index in the fine matrix sequence
         cell_to_idx_X = {cell: idx for idx, cell in enumerate(cells_X_fine)}
         cell_to_idx_Y = {cell: idx for idx, cell in enumerate(cells_Y_fine)}
         
         allowed_edges = []
-        
         for i in range(len(cells_X_coarse)):
             for j in range(len(cells_Y_coarse)):
                 if mu_hat[i, j] > 0:
                     parent_a = cells_X_coarse[i]
                     parent_b = cells_Y_coarse[j]
-                    
-                    # Allow all children of parent_a to trade with children of parent_b
                     for child_a in parent_a.children:
                         for child_b in parent_b.children:
-                            idx_a = cell_to_idx_X[child_a]
-                            idx_b = cell_to_idx_Y[child_b]
-                            allowed_edges.append((idx_a, idx_b))
+                            allowed_edges.append((cell_to_idx_X[child_a], cell_to_idx_Y[child_b]))
                             
         return allowed_edges
 
     def solve(self):
-        """
-        Master loop descending down the structural layers.
-        """
+        """Master multi-scale loop descending with dynamic consistency checks."""
         coarsest_gen = self.g - 1
         print(f"Starting Multiscale Solve. Root Generation: {coarsest_gen}")
         
-        # 1. Base initialization step at the widest coarsened layer
+        # 1. Base initialization step at the coarsest layer
         C_fine, mu_X_fine, mu_Y_fine = self._build_coarsened_problem(coarsest_gen)
         
-        manager = EpsScalingManager(
-            AuctionOT, 
-            C_fine, 
-            mu_X=mu_X_fine, 
-            mu_Y=mu_Y_fine
-        )
-        current_mu, _, _ = manager.solve()
+        manager = EpsScalingManager(AuctionOT, C_fine, mu_X=mu_X_fine, mu_Y=mu_Y_fine)
+        current_mu, _, _, _ = manager.solve()
         
         # 2. Refine downwards sequentially
         for gen in range(coarsest_gen - 1, -1, -1):
             print(f"\n--- Refining to Generation {gen} ---")
             
-            # Map neighbor positions matching the current dimensional metrics
             N_guess = self._induce_sparse_neighborhood(current_mu, gen + 1)
-            
-            # Always build coarsened structures based on the node configurations
             C_fine, mu_X_fine, mu_Y_fine = self._build_coarsened_problem(gen)
+            
+            # --- DYNAMIC ADAPTIVE LOOP (Section 4.2) ---
+            while True:
+                hybrid_manager = EpsScalingManager(
+                    AuctionOT, C_fine, mu_X=mu_X_fine, mu_Y=mu_Y_fine, allowed_edges=N_guess
+                )
+                current_mu, total_cost, total_iters, final_beta = hybrid_manager.solve()
                 
-            hybrid_manager = EpsScalingManager(
-                AuctionOT,
-                C_fine,
-                mu_X=mu_X_fine,
-                mu_Y=mu_Y_fine,
-                allowed_edges=N_guess
-            )
-            current_mu, total_cost, total_iters = hybrid_manager.solve()
-            print(f"Generation {gen} solved. Cost: {total_cost:.4f} ({total_iters} total iterations)")
+                # Deduce the dual variable alpha(x) from current active assignments
+                alpha = np.zeros(len(mu_X_fine))
+                for x in range(len(mu_X_fine)):
+                    assigned_ys = np.where(current_mu[x] > 0)[0]
+                    if len(assigned_ys) > 0:
+                        alpha[x] = np.min(C_fine[x, assigned_ys] - final_beta[assigned_ys])
+                
+                # Check for boundary violations across the unallowed dense matrix entries
+                violations = []
+                target_eps = hybrid_manager.target_eps
+                N_guess_set = set(N_guess)
+                
+                for x in range(len(mu_X_fine)):
+                    for y in range(len(mu_Y_fine)):
+                        if (x, y) not in N_guess_set:
+                            # Slackness condition check
+                            if alpha[x] + final_beta[y] > C_fine[x, y] + target_eps + 1e-5:
+                                violations.append((x, y))
+                
+                if len(violations) == 0:
+                    print(f"Generation {gen} solved and verified. Cost: {total_cost:.4f}")
+                    break
+                else:
+                    print(f"  [Boundary Violation] Found {len(violations)} missing edges. Expanding neighborhood...")
+                    N_guess.extend(violations)
             
         print("\nMultiscale optimization complete. Reconstructing original array alignments...")
         
-        # 3. Restore the original matrix coordinates
-        # Generation 0 cells correspond to unique spatial points. 
-        # Map indices back to the input vector layout.
+        # 3. Restore original matrix coordinates
         orig_idx_X = [cell.point_indices[0] for cell in self.tree_X.generations[0]]
         orig_idx_Y = [cell.point_indices[0] for cell in self.tree_Y.generations[0]]
         
