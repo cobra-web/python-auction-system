@@ -1,9 +1,4 @@
 class SparseNeighborhood:
-    """
-    Manages the sparse subset of allowed assignment pairs \hat{N}.
-    Essential for the fast iterations and O(1) lookups required by the 
-    sparse/dense hybrid auction algorithm.
-    """
     def __init__(self, n_X, n_Y, initial_edges=None):
         self.n_X = n_X
         self.n_Y = n_Y
@@ -18,6 +13,10 @@ class SparseNeighborhood:
 
     def add_edge(self, x, y):
         """Adds a single (x, y) edge to the active neighborhood."""
+
+        if x not in self.adj_X:
+            self.adj_X[x] = set()
+        
         if y not in self.adj_X[x]:
             self.adj_X[x].add(y)
             self.edge_count += 1
