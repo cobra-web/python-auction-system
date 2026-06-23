@@ -31,8 +31,8 @@ def run_hierarchical_benchmark(N=32):
         
     # 4. Construct the Quadtree structures
     print("Building spatial hierarchical partitions...")
-    tree_X = HierarchicalPartition(X_pts)
-    tree_Y = HierarchicalPartition(Y_pts)
+    tree_X = HierarchicalPartition(X_pts, max_depth=5)
+    tree_Y = HierarchicalPartition(Y_pts, max_depth=5)
     print(f"Tree depth established: {tree_X.g} generations.")
     
     # --- RUN DENSE BASELINE ---
