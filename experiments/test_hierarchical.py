@@ -47,7 +47,7 @@ def run_hierarchical_benchmark(N=32):
     print("\n[Executing Dense Baseline Solver...]")
     t0 = time.perf_counter()
     dense_manager = EpsScalingManager(AuctionOT, C, mu_X=mu_X, mu_Y=mu_Y)
-    dense_mu, dense_cost, dense_iters = dense_manager.solve()
+    dense_mu, dense_cost, dense_iters, _ = dense_manager.solve()
     t_dense = time.perf_counter() - t0
     print(f"Dense Baseline Result -> Cost: {dense_cost:.4f} | Time: {t_dense:.4f}s")
     
