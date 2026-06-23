@@ -118,6 +118,8 @@ class HierarchicalMultiscaleSolver:
                 else:
                     print(f"  [Boundary Violation] Found {len(violations)} missing edges. Expanding neighborhood...")
                     N_guess.extend(violations)
+
+            self.last_N_guess = N_guess
             
         print("\nMultiscale optimization complete. Reconstructing original array alignments...")
         
