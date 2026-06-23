@@ -113,6 +113,19 @@ def run_visualization():
     tree_X = HierarchicalPartition(X_pts)
     tree_Y = HierarchicalPartition(Y_pts)
     
+    max_g = max(tree_X.g, tree_Y.g)
+    
+    while tree_X.g < max_g:
+        # Pad tree_X generations with a copy of its finest layer
+        tree_X.generations.append(tree_X.generations[-1])
+        tree_X.g += 1
+        
+    while tree_Y.g < max_g:
+        # Pad tree_Y generations with a copy of its finest layer
+        tree_Y.generations.append(tree_Y.generations[-1])
+        tree_Y.g += 1
+    print(f"Tree depth established and equalised: {max_g} generations.")
+    
     solver = VisualizableMultiscaleSolver(tree_X, tree_Y, C, mu_X, mu_Y)
     solver.solve_with_plots()
 
