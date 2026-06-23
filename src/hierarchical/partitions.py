@@ -1,9 +1,6 @@
 import numpy as np
 
 class PartitionCell:
-    """
-    Represents a single cell 'a' in the hierarchical partition A.
-    """
     def __init__(self, cell_id, point_indices, depth=0):
         self.id = cell_id
         self.point_indices = point_indices  # The subset of X or Y contained in this cell
@@ -17,14 +14,11 @@ class PartitionCell:
 
 
 class HierarchicalPartition:
-    """
-    Constructs a Quadtree (2D) or Octree (3D) to fulfill the properties
-    described in Section 4 of Schmitzer & Schnörr (2013).
-    """
-    def __init__(self, points):
+    def __init__(self, points, target_g=None):
         self.points = np.array(points, dtype=float)
         self.dimensions = self.points.shape[1] # 2 for Quad, 3 for Oct
         self.cells = []
+        self.target_g = target_g
         
         self._cell_counter = 0
         self._build_tree()
@@ -40,6 +34,9 @@ class HierarchicalPartition:
         
         # 1. Build the spatial tree recursively (top-down)
         max_depth = self._split_recursive(root_cell, root_bbox)
+        
+        if self.target_g is not None:
+            max_depth = max(max_depth, self.target_g - 1)
         
         # 2. Pad the leaves so all singletons sit exactly at generation 0 (the bottom)
         self._pad_leaves(max_depth)
