@@ -1,6 +1,11 @@
 import numpy as np
 
 class EpsScalingManager:
+    """
+    Manages the epsilon-scaling loop for Auction algorithms.
+    Follows the rudimentary scaling scheme described in Section 6 of 
+    Schmitzer & Schnörr (2013) and Bertsekas [3].
+    """
     def __init__(self, solver_class, cost_matrix, theta=5.0, target_eps=None, **solver_kwargs):
         self.solver_class = solver_class
         self.C = np.array(cost_matrix)
@@ -52,7 +57,7 @@ class EpsScalingManager:
         
         true_cost = self._calculate_final_cost(final_assignment)
         
-        # --- CRUCIAL: RETURNS 4 VALUES TO SPREAD DUAL VARIABLES UPWARDS ---
+        # --- THE 4-VALUE RETURN THAT FIXES THE VALUEERROR ---
         return final_assignment, true_cost, total_iterations, best_beta
 
     def _inject_beta(self, solver, old_beta):
