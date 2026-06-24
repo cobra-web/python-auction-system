@@ -5,7 +5,6 @@ from src.utils.cost_functions import squared_euclidean
 from src.hierarchical.partitions import HierarchicalPartition
 from src.hierarchical.multiscale_solver import HierarchicalMultiscaleSolver
 
-# Create a custom visualization subclass so we don't mess up your clean production solver
 class VisualizableMultiscaleSolver(HierarchicalMultiscaleSolver):
     def __init__(self, tree_X, tree_Y, cost_matrix, mu_X, mu_Y, output_dir="plots"):
         super().__init__(tree_X, tree_Y, cost_matrix, mu_X, mu_Y)
@@ -16,15 +15,14 @@ class VisualizableMultiscaleSolver(HierarchicalMultiscaleSolver):
         """Generates a side-by-side subplot of the generation's matrix state."""
         fig, axes = plt.subplots(1, 2, figsize=(12, 5))
         
-        # Left Plot: Coarsened Cost Matrix
+        # coarse
         im0 = axes[0].imshow(C_fine, cmap='viridis', origin='upper')
         axes[0].set_title(f"Coarse Cost Matrix (Gen {gen})")
         axes[0].set_xlabel("Y Coarse Cells")
         axes[0].set_ylabel("X Coarse Cells")
         fig.colorbar(im0, ax=axes[0], label="Cost")
         
-        # Right Plot: Aggregated Coupling Matrix
-        # We overlay a red grid outline over the sparse guess neighborhood if provided
+        # aggregated
         im1 = axes[1].imshow(mu_fine, cmap='Blues', origin='upper', vmin=0)
         axes[1].set_title(f"Coupling Allocation (Gen {gen})")
         axes[1].set_xlabel("Y Coarse Cells")
@@ -32,25 +30,22 @@ class VisualizableMultiscaleSolver(HierarchicalMultiscaleSolver):
         fig.colorbar(im1, ax=axes[1], label="Mass Transported")
         
         if N_guess is not None:
-            # Highlight the sparse neighborhood boundaries with small red dots
             for (x, y) in N_guess:
-                axes[1].plot(y, x, 'rx', markersize=4, alpha=0.4)
+                axes[1].plot(y, x, 'rx', markersize=4, alpha=0.4) #small red dots
                 
         plt.suptitle(f"Hierarchical Multiscale Refinement — Generation {gen} ({C_fine.shape[0]}x{C_fine.shape[1]})", fontsize=14)
         plt.tight_layout()
         
-        # Save file instead of blocking terminal execution
+        # save instead of blocking terminal execution
         file_path = os.path.join(self.output_dir, f"generation_{gen}.png")
         plt.savefig(file_path, dpi=150)
         plt.close()
         print(f"  [Visualizer] Saved snapshot: {file_path}")
 
     def solve_with_plots(self):
-        """Runs the multiscale loop and takes a snapshot at every scale level."""
         coarsest_gen = self.g - 1
         print(f"\n[Visualizer Master Loop] Starting at Coarsest Generation: {coarsest_gen}")
         
-        # 1. Base Level Root Solve
         C_fine, mu_X_fine, mu_Y_fine = self._build_coarsened_problem(coarsest_gen)
         from src.utils.eps_scaling import EpsScalingManager
         from src.core.ot_auction import AuctionOT
@@ -58,10 +53,8 @@ class VisualizableMultiscaleSolver(HierarchicalMultiscaleSolver):
         manager = EpsScalingManager(AuctionOT, C_fine, mu_X=mu_X_fine, mu_Y=mu_Y_fine)
         current_mu, _, _, _ = manager.solve()
         
-        # Snapshot the root level state
-        self.plot_generation_state(coarsest_gen, C_fine, current_mu)
+        self.plot_generation_state(coarsest_gen, C_fine, current_mu) #snapshot the root level state
         
-        # 2. Sequential Descent down the tree levels
         for gen in range(coarsest_gen - 1, -1, -1):
             N_guess = self._induce_sparse_neighborhood(current_mu, gen + 1)
             C_fine, mu_X_fine, mu_Y_fine = self._build_coarsened_problem(gen)
@@ -72,7 +65,7 @@ class VisualizableMultiscaleSolver(HierarchicalMultiscaleSolver):
                 )
                 current_mu, _, _, final_beta = hybrid_manager.solve()
                 
-                # Check for boundary dynamic updates
+                #check for boundary dynamic updates
                 alpha = np.zeros(len(mu_X_fine))
                 for x in range(len(mu_X_fine)):
                     assigned_ys = np.where(current_mu[x] > 0)[0]
@@ -92,13 +85,13 @@ class VisualizableMultiscaleSolver(HierarchicalMultiscaleSolver):
                 else:
                     N_guess.extend(violations)
             
-            # Snapshot the optimized, corrected generation state before moving to the next
+            #snapshots the corrected gen state before moving to the next
             self.plot_generation_state(gen, C_fine, current_mu, N_guess)
             
         print("\nAll generations visualised successfully!")
 
 def run_visualization():
-    np.random.seed(101)
+    np.random.seed(50)
     N = 32
     X_pts = np.random.rand(N, 2)
     Y_pts = np.random.rand(N, 2)
@@ -116,12 +109,12 @@ def run_visualization():
     max_g = max(tree_X.g, tree_Y.g)
     
     while tree_X.g < max_g:
-        # Pad tree_X generations with a copy of its finest layer
+        #pad tree_X gens with a copy of its finest layer
         tree_X.generations.append(tree_X.generations[-1])
         tree_X.g += 1
         
     while tree_Y.g < max_g:
-        # Pad tree_Y generations with a copy of its finest layer
+        #pad tree_Y gens with a copy of its finest layer
         tree_Y.generations.append(tree_Y.generations[-1])
         tree_Y.g += 1
     print(f"Tree depth established and equalised: {max_g} generations.")
