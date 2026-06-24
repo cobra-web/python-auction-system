@@ -6,7 +6,7 @@ class ConsistencyChecker:
         self.tree_Y = tree_Y
         self.C = cost_matrix
         
-        #track N hat using a set for O(1) lookups
+        #track N hat using hashing
         self.N_set = set(initial_sparse_N)
         
         self.alpha_prime_hat = {}
