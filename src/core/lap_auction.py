@@ -5,7 +5,7 @@ class AuctionLAP:
         self.C = np.array(cost_matrix, dtype=float)
         self.N = self.C.shape[0]
         
-        # Initialization of state variables
+        #initialization of state variables
         self.beta = np.zeros(self.N)        
         self.x_to_y = np.full(self.N, -1)   # S (X -> Y)
         self.y_to_x = np.full(self.N, -1)   # S (Y -> X)
@@ -36,7 +36,7 @@ class AuctionLAP:
         unassigned_x = np.where(self.x_to_y == -1)[0]
         
         for x in unassigned_x:
-            # c(x,y) - beta(y)
+            #c(x,y) - beta(y)
             eff_costs = self.C[x, :] - self.beta
             
             idx = np.argpartition(eff_costs, 1)
@@ -68,9 +68,9 @@ class AuctionLAP:
             # Update assignment S
             old_x = self.y_to_x[y]
             if old_x != -1:
-                # Remove from the assignment S any pair (x,y) if one exists
+                #remove from the assignment S any pair (x,y) if one exists
                 self.x_to_y[old_x] = -1
                 
-            # Add to S the new pair (x*, y)
+            #add to S the new pair (x*, y)
             self.x_to_y[best_x] = y
             self.y_to_x[y] = best_x
