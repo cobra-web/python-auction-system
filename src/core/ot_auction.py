@@ -15,7 +15,7 @@ class AuctionOT:
         else:
             self.epsilon = epsilon
             
-        self.mu = np.zeros((self.N_X, self.N_Y), dtype=int) # Coupling matrix
+        self.mu = np.zeros((self.N_X, self.N_Y), dtype=int) #coupling matrix
         
         self.y_atoms = []
         for y in range(self.N_Y):
@@ -31,11 +31,11 @@ class AuctionOT:
     def solve(self):
         iterations = 0
         while True:
-            # Calculate unassigned mass for each x
+            #calculate unassigned mass for each x
             assigned_X = np.sum(self.mu, axis=1)
             unassigned_X = self.mu_X - assigned_X
             
-            # If all mass is assigned, we are done
+            #if all mass is assigned, we are done
             if np.sum(unassigned_X) == 0:
                 break
                 
@@ -54,14 +54,14 @@ class AuctionOT:
             if mass_to_assign <= 0:
                 continue
                 
-            # Construct the Pi(x) list (Eq. 10 & 11)
-            # Contains tuples: (effective_cost, target_y, mass_available, occupied_by_x, current_beta)
+            #Eq. 10 & 11
+            #contains: (effective_cost, target_y, mass_available, occupied_by_x, current_beta)
             Pi_x = []
 
             if self.sparse is not None:
                 valid_y_targets = self.sparse.get_allowed_y(x)
             else:
-                valid_y_targets = range(self.N_Y) #Fallback to dense
+                valid_y_targets = range(self.N_Y) #fallback to dense
             
             
             for y in valid_y_targets:
@@ -74,10 +74,10 @@ class AuctionOT:
                     eff_cost = self.C[x, y] - atom['beta']
                     Pi_x.append((eff_cost, y, atom['mass'], x_prime, atom['beta']))
             
-            # Sort Pi(x) in ascending order (Eq. 11)
+            #Eq. 11
             Pi_x.sort(key=lambda item: item[0])
             
-            # Determine bid recipients and the m-th entry for alpha' (Eq. 12)
+            #Eq. 12
             accumulated_mass = 0
             bid_targets = []
             alpha_prime = 0
@@ -85,25 +85,23 @@ class AuctionOT:
             for i, item in enumerate(Pi_x):
                 eff_cost, y, mass_avail, x_prime, old_beta = item
                 
-                # We want to claim this mass
                 claim_amount = min(mass_avail, mass_to_assign - accumulated_mass)
                 if claim_amount > 0:
                     bid_targets.append({'y': y, 'mass': claim_amount, 'eff_cost': eff_cost, 'x_prime': x_prime})
                     accumulated_mass += claim_amount
                 
-                # Once we have found enough mass to fulfill our needs, the *next* worst price sets alpha'
                 if accumulated_mass >= mass_to_assign:
-                    # Eq 12: alpha'(x) is determined by the next entry in Pi_x
+                    # Eq 12
                     if i + 1 < len(Pi_x):
                         alpha_prime = Pi_x[i+1][0]
                     else:
-                        alpha_prime = eff_cost # Fallback if we hit the exact end of the list
+                        alpha_prime = eff_cost #fallback if we hit the exact end of the list
                     break
             
-            # Submit the bids
+            #submit the bids
             for target in bid_targets:
                 y = target['y']
-                # Equivalent to Eq 8, adjusted for generalized alpha_prime
+                #Eq 8, adjusted for generalized alpha_prime
                 bid_value = self.C[x, y] - alpha_prime - self.epsilon
                 bids[y].append({'x': x, 'mass': target['mass'], 'bid_value': bid_value, 'x_prime': target['x_prime']})
                 
@@ -114,7 +112,7 @@ class AuctionOT:
             if not y_bids:
                 continue
                 
-            # Process bids for this y. To keep it faithful, lowest bid value gets accepted.
+            #lowest bid value gets accepted
             y_bids.sort(key=lambda b: b['bid_value'])
             
             for bid in y_bids:
@@ -123,22 +121,16 @@ class AuctionOT:
                 new_beta = bid['bid_value']
                 x_prime = bid['x_prime']
                 
-                # Find the atom in y we are trying to displace
                 for i, atom in enumerate(self.y_atoms[y]):
                     if atom['x'] == x_prime and atom['mass'] >= mass_won:
-                        # Remove old assignment from coupling matrix
                         if x_prime != -1:
                             self.mu[x_prime, y] -= mass_won
                             
-                        # Add new assignment
                         self.mu[x, y] += mass_won
-                        
-                        # Update the y_atoms tracking
                         atom['mass'] -= mass_won
                         
-                        # Insert the newly won mass atom
                         self.y_atoms[y].append({'x': x, 'mass': mass_won, 'beta': new_beta})
                         break
                         
-            # Cleanup zero-mass atoms in y
+            #cleanup zero-mass atoms in y
             self.y_atoms[y] = [atom for atom in self.y_atoms[y] if atom['mass'] > 0]
