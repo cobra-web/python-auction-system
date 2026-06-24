@@ -18,7 +18,7 @@ class SilencePrints:
 
 def run_lap_test(N=16):
     print("\n--- Running LAP Test (N=16) ---")
-    np.random.seed(42)
+    np.random.seed(50)
     X = np.random.rand(N, 2)
     Y = np.random.rand(N, 2)
     C = squared_euclidean(X, Y)
@@ -55,7 +55,7 @@ def run_lap_test(N=16):
 
 def run_ot_test(N=16):
     print("\n--- Running OT Test (N=16) ---")
-    np.random.seed(42)
+    np.random.seed(50)
     X = np.random.rand(N, 2)
     Y = np.random.rand(N, 2)
     C = squared_euclidean(X, Y)
