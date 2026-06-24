@@ -1,4 +1,5 @@
 import numpy as np
+from src.core.lap_auction import AuctionLAP
 import matplotlib.pyplot as plt
 from scipy.spatial import distance_matrix
 
