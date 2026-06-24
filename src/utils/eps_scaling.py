@@ -17,9 +17,6 @@ class EpsScalingManager:
         self.start_eps = max(C_max / 2.0, self.target_eps * self.theta)
 
     def solve(self):
-        """
-        Runs the successive auction solves, passing dual variables forward.
-        """
         current_eps = self.start_eps
         best_beta = None
         final_assignment = None
@@ -52,11 +49,9 @@ class EpsScalingManager:
         
         true_cost = self._calculate_final_cost(final_assignment)
         
-        # --- THIS IS THE 4-VALUE RETURN LINE THAT WE NEED ---
         return final_assignment, true_cost, total_iterations, best_beta
 
     def _inject_beta(self, solver, old_beta):
-        """Helper to inject prices depending on the solver type."""
         if hasattr(solver, 'y_atoms'):
             for y in range(solver.N_Y):
                 if len(solver.y_atoms[y]) > 0:
@@ -65,14 +60,12 @@ class EpsScalingManager:
             solver.beta = np.copy(old_beta)
 
     def _extract_beta(self, solver):
-        """Helper to extract prices depending on the solver type."""
         if hasattr(solver, 'y_atoms'):
             return np.array([min(atom['beta'] for atom in atoms) for atoms in solver.y_atoms])
         else:
             return np.copy(solver.beta)
 
     def _calculate_final_cost(self, assignment):
-        """Helper to compute cost without the epsilon penalties."""
         if assignment.ndim == 1: 
             return sum(self.C[x, assignment[x]] for x in range(self.N))
         else:                    
