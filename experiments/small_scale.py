@@ -83,7 +83,7 @@ def run_ot_test(N=16):
     ax1.set_ylabel("Points in X")
     fig.colorbar(im1, ax=ax1)
     
-    # Perfekter Kontrast für variable Massen: Skalierung bis zum Maximum der Matrix
+    # scaling to the max of matrix
     im2 = ax2.imshow(coupling_matrix, cmap='Oranges', vmin=0, vmax=np.max(coupling_matrix))
     ax2.set_title("OT Final Coupling Matrix")
     ax2.set_xlabel("Points in Y")
