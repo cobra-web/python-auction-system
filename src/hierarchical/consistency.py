@@ -6,33 +6,32 @@ class ConsistencyChecker:
         self.tree_Y = tree_Y
         self.C = cost_matrix
         
-        # Track the active sparse neighborhood \hat{N} using a set for O(1) lookups
+        #track N hat using a set for O(1) lookups
         self.N_set = set(initial_sparse_N)
         
-        # Storage for hierarchical extensions
         self.alpha_prime_hat = {}
         self.beta_hat = {}
 
     def _compute_extensions(self, alpha_prime, beta):
         #Eq 13
-        # Propagate alpha_prime_hat up tree_X
+        #propagate alpha_prime_hat up tree_X
         for gen in range(self.tree_X.g):
             for cell in self.tree_X.generations[gen]:
-                if gen == 0: # Leaves (Singletons)
+                if gen == 0: #leaves
                     x = cell.point_indices[0]
                     self.alpha_prime_hat[cell.id] = alpha_prime[x]
-                else:        # Parents
+                else:        #parents
                     self.alpha_prime_hat[cell.id] = max(
                         self.alpha_prime_hat[child.id] for child in cell.children
                     )
                     
-        # Propagate beta_hat up tree_Y
+        #propagate beta_hat up tree_Y
         for gen in range(self.tree_Y.g):
             for cell in self.tree_Y.generations[gen]:
-                if gen == 0: # Leaves (Singletons)
+                if gen == 0: #leaves
                     y = cell.point_indices[0]
                     self.beta_hat[cell.id] = beta[y]
-                else:        # Parents
+                else:        #parents
                     self.beta_hat[cell.id] = max(
                         self.beta_hat[child.id] for child in cell.children
                     )
@@ -46,7 +45,7 @@ class ConsistencyChecker:
     def run_consistency_check(self, alpha_prime, beta, start_gen=None):
         self._compute_extensions(alpha_prime, beta)
         
-        # Usually start checking at the coarsest level (root)
+        #starts checking at the coarsest level/root
         if start_gen is None:
             start_gen = self.tree_X.g - 1
             
@@ -55,7 +54,7 @@ class ConsistencyChecker:
             for cell_b in self.tree_Y.generations[start_gen]:
                 new_edges.extend(self._check_recursive(cell_a, cell_b))
                 
-        # Update sparse neighborhood and return the affected 'x' nodes
+        #updates sparse neighborhood and returns the affected 'x' nodes
         rebid_candidates = set()
         for x, y in new_edges:
             self.N_set.add((x, y))
@@ -68,21 +67,20 @@ class ConsistencyChecker:
         a_prime_hat = self.alpha_prime_hat[cell_a.id]
         b_hat = self.beta_hat[cell_b.id]
         
-        # Condition from text: If true, no deeper check is needed[cite: 195].
         if c_hat_val - b_hat >= a_prime_hat:
             return []
             
-        # If violated and we are at the finest scale (Generation 0) [cite: 197]
+        #if violated and we are at gen 0
         if cell_a.generation == 0 and cell_b.generation == 0:
             x = cell_a.point_indices[0]
             y = cell_b.point_indices[0]
             
-            # If not already in our sparse set, we found a missing link! [cite: 198]
+            #if not already in our sparse set, we found a missing link
             if (x, y) not in self.N_set:
                 return [(x, y)]
             return []
             
-        # If violated and we are at a coarse scale, recurse into children 
+        #if violated and we are at a coarse scale, recurse into children 
         found_edges = []
         for child_a in cell_a.children:
             for child_b in cell_b.children:
