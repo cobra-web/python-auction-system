@@ -14,7 +14,7 @@ class HierarchicalMultiscaleSolver:
         self.g = self.tree_X.g
 
     def _build_coarsened_problem(self, gen):
-        """Eq. 16: Constructs the coarsened Optimal Transport problem at generation 'n'."""
+        #Eq. 16
         cells_X = self.tree_X.generations[gen]
         cells_Y = self.tree_Y.generations[gen]
         
@@ -40,7 +40,6 @@ class HierarchicalMultiscaleSolver:
         return C_hat, mu_X_hat, mu_Y_hat
 
     def _induce_sparse_neighborhood(self, mu_hat, gen_coarse):
-        """Projects active coupling supports down to child cells at the next finer generation."""
         gen_fine = gen_coarse - 1
         cells_X_coarse = self.tree_X.generations[gen_coarse]
         cells_Y_coarse = self.tree_Y.generations[gen_coarse]
@@ -69,38 +68,35 @@ class HierarchicalMultiscaleSolver:
         return allowed_edges
 
     def solve(self):
-        """Master multi-scale loop descending with dynamic consistency checks."""
         coarsest_gen = self.g - 1
         print(f"Starting Multiscale Solve. Root Generation: {coarsest_gen}")
         
-        # 1. Base initialization step at the coarsest layer
+        #Base initialization step at the coarsest layer
         C_fine, mu_X_fine, mu_Y_fine = self._build_coarsened_problem(coarsest_gen)
         
         manager = EpsScalingManager(AuctionOT, C_fine, mu_X=mu_X_fine, mu_Y=mu_Y_fine)
         current_mu, _, _, _ = manager.solve()
         
-        # 2. Refine downwards sequentially
+        #Refine downwards
         for gen in range(coarsest_gen - 1, -1, -1):
             print(f"\n--- Refining to Generation {gen} ---")
             
             N_guess = self._induce_sparse_neighborhood(current_mu, gen + 1)
             C_fine, mu_X_fine, mu_Y_fine = self._build_coarsened_problem(gen)
             
-            # --- DYNAMIC ADAPTIVE LOOP (Section 4.2) ---
+            #Section 4.2
             while True:
                 hybrid_manager = EpsScalingManager(
                     AuctionOT, C_fine, mu_X=mu_X_fine, mu_Y=mu_Y_fine, allowed_edges=N_guess
                 )
                 current_mu, total_cost, total_iters, final_beta = hybrid_manager.solve()
                 
-                # Deduce the dual variable alpha(x) from current active assignments
                 alpha = np.zeros(len(mu_X_fine))
                 for x in range(len(mu_X_fine)):
                     assigned_ys = np.where(current_mu[x] > 0)[0]
                     if len(assigned_ys) > 0:
                         alpha[x] = np.min(C_fine[x, assigned_ys] - final_beta[assigned_ys])
                 
-                # Check for boundary violations across the unallowed dense matrix entries
                 violations = []
                 target_eps = hybrid_manager.target_eps
                 N_guess_set = set(N_guess)
@@ -108,7 +104,7 @@ class HierarchicalMultiscaleSolver:
                 for x in range(len(mu_X_fine)):
                     for y in range(len(mu_Y_fine)):
                         if (x, y) not in N_guess_set:
-                            # Slackness condition check
+                            #slackness condition check
                             if alpha[x] + final_beta[y] > C_fine[x, y] + target_eps + 1e-5:
                                 violations.append((x, y))
                 
@@ -123,7 +119,7 @@ class HierarchicalMultiscaleSolver:
             
         print("\nMultiscale optimization complete. Reconstructing original array alignments...")
         
-        # 3. Restore original matrix coordinates
+        #restore original matrix coordinates
         orig_idx_X = [cell.point_indices[0] for cell in self.tree_X.generations[0]]
         orig_idx_Y = [cell.point_indices[0] for cell in self.tree_Y.generations[0]]
         
