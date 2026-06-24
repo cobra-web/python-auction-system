@@ -10,7 +10,6 @@ from src.hierarchical.partitions import HierarchicalPartition
 from src.hierarchical.multiscale_solver import HierarchicalMultiscaleSolver
 
 class SilencePrints:
-    """Context manager to suppress internal solver print statements for a clean table."""
     def __enter__(self):
         import sys
         self._original_stdout = sys.stdout
@@ -26,14 +25,12 @@ def run_comprehensive_benchmarks(N_sizes=[16, 32, 64, 128]):
     print("-" * 80)
     
     for N in N_sizes:
-        np.random.seed(42) 
+        np.random.seed(50) 
         
-        # 1. 2D Koordinaten generieren
         X_pts = np.random.rand(N, 2)
         Y_pts = np.random.rand(N, 2)
         C = squared_euclidean(X_pts, Y_pts)
         
-        # 2. Variable Massen für OT generieren (LAP nutzt implizit Masse = 1)
         mu_X = np.random.randint(1, 5, size=N)
         mu_Y = np.random.randint(1, 5, size=N)
         diff = np.sum(mu_X) - np.sum(mu_Y)
@@ -44,9 +41,7 @@ def run_comprehensive_benchmarks(N_sizes=[16, 32, 64, 128]):
             
         dense_pairs = N * N
             
-        # ----------------------------------------------------
-        # RUN COMPETITOR 1: LAP Auction (Strict 1-to-1)
-        # ----------------------------------------------------
+        # LAP Auction (Strict 1-to-1)
         try:
             t0 = time.perf_counter()
             with SilencePrints():
@@ -57,9 +52,7 @@ def run_comprehensive_benchmarks(N_sizes=[16, 32, 64, 128]):
         except Exception as e:
             print(f"{N:<10} | {'LAP Auction':<15} | {'FAILED':<12} | {'FAILED':<14} | {'-':<12}")
 
-        # ----------------------------------------------------
-        # RUN COMPETITOR 2: Dense Auction (General OT)
-        # ----------------------------------------------------
+        # Dense Auction (General OT)
         try:
             t1 = time.perf_counter()
             with SilencePrints():
@@ -70,9 +63,7 @@ def run_comprehensive_benchmarks(N_sizes=[16, 32, 64, 128]):
         except Exception as e:
             print(f"{N:<10} | {'Dense OT':<15} | {'FAILED':<12} | {'FAILED':<14} | {'-':<12}")
 
-        # ----------------------------------------------------
-        # RUN COMPETITOR 3: Hierarchical Multiscale Auction
-        # ----------------------------------------------------
+        # Hierarchical Multiscale Auction
         try:
             tree_X = HierarchicalPartition(X_pts)
             tree_Y = HierarchicalPartition(Y_pts)
