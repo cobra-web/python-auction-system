@@ -7,7 +7,7 @@ from src.utils.eps_scaling import EpsScalingManager
 from src.core.ot_auction import AuctionOT
 
 def run_hierarchical_benchmark(N=32):
-    print(f"  RUNNING HIERARCHICAL SOLVER BENCHMARK (N={N})")
+    print(f"RUNNING HIERARCHICAL SOLVER BENCHMARK (N={N})")
     np.random.seed(101)
     
     X_pts = np.random.rand(N, 2)
