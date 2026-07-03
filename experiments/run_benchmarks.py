@@ -4,7 +4,7 @@ import numpy as np
 from src.utils.cost_functions import squared_euclidean
 from src.utils.eps_scaling import EpsScalingManager
 from src.core.ot_auction import AuctionOT
-from src.core.lap_auction import AuctionLAP  # <--- LAP hinzugefuegt!
+from src.core.lap_auction import AuctionLAP 
 
 from src.hierarchical.partitions import HierarchicalPartition
 from src.hierarchical.multiscale_solver import HierarchicalMultiscaleSolver
