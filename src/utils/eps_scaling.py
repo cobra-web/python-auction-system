@@ -9,7 +9,13 @@ class EpsScalingManager:
         self.N = self.C.shape[0]
         
         if target_eps is None:
-            self.target_eps = 1.0 / (self.N + 1.0)
+            unique_costs = np.unique(self.C)
+            if len(unique_costs) > 1:
+                delta_c = np.min(np.diff(unique_costs))
+            else:
+                delta_c = 1.0 
+                
+            self.target_eps = delta_c / float(self.N)
         else:
             self.target_eps = target_eps
             
@@ -22,10 +28,10 @@ class EpsScalingManager:
         final_assignment = None
         total_iterations = 0
         
-        print(f"Starting e-scaling. Target eps: {self.target_eps:.4f}")
+        print(f"Starting e-scaling. Target eps: {self.target_eps:.6f}")
         
         while current_eps >= self.target_eps:
-            print(f"  -> Solving for eps = {current_eps:.4f}")
+            print(f"  -> Solving for eps = {current_eps:.6f}")
             
             solver = self.solver_class(self.C, epsilon=current_eps, **self.solver_kwargs)
             
@@ -40,7 +46,7 @@ class EpsScalingManager:
             total_iterations += iters
             best_beta = self._extract_beta(solver)
             
-            if current_eps == self.target_eps:
+            if current_eps <= self.target_eps:
                 break
                 
             current_eps = max(current_eps / self.theta, self.target_eps)
@@ -54,14 +60,14 @@ class EpsScalingManager:
     def _inject_beta(self, solver, old_beta):
         if hasattr(solver, 'y_atoms'):
             for y in range(solver.N_Y):
-                if len(solver.y_atoms[y]) > 0:
-                    solver.y_atoms[y][0]['beta'] = old_beta[y]
+                for atom in solver.y_atoms[y]:
+                    atom['beta'] = old_beta[y]
         else:
             solver.beta = np.copy(old_beta)
 
     def _extract_beta(self, solver):
         if hasattr(solver, 'y_atoms'):
-            return np.array([min(atom['beta'] for atom in atoms) for atoms in solver.y_atoms])
+            return np.array([max(atom['beta'] for atom in atoms) if atoms else 0.0 for atoms in solver.y_atoms])
         else:
             return np.copy(solver.beta)
 
