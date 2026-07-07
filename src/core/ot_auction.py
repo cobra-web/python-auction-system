@@ -1,4 +1,5 @@
 import numpy as np
+import sys
 from src.utils.data_structures import SparseNeighborhood
 
 class AuctionOT:
@@ -42,7 +43,8 @@ class AuctionOT:
             bids = self._bidding_phase(unassigned_X)
             self._assignment_phase(bids)
             iterations += 1
-            print(f"iter {iterations}: unassigned={np.sum(unassigned_X)}, total_atoms={sum(len(a) for a in self.y_atoms)}")
+            if iterations <= 50 or iterations % 500 == 0:
+                print(f"iter {iterations}: unassigned={np.sum(unassigned_X)}, total_atoms={sum(len(a) for a in self.y_atoms)}", file=sys.stderr)
 
             if iterations > 20000:
                 raise RuntimeError(f"AuctionOT did not converge after {iterations} iterations - likely a cycling/dropped-bid bug")
