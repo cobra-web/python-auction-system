@@ -91,7 +91,6 @@ class HierarchicalMultiscaleSolver:
             C_fine, mu_X_fine, mu_Y_fine = self._build_coarsened_problem(gen)
 
             checker.N_set = set(N_guess)
-            checker.c_hat_cache = {k: v for k, v in checker.c_hat_cache.items()}  # keep cache, drop nothing
 
             prev_alpha = None
             prev_beta = None
@@ -120,12 +119,9 @@ class HierarchicalMultiscaleSolver:
                 target_eps = hybrid_manager.target_eps
                 alpha_prime = alpha + target_eps
 
-                rebid_candidates = checker.run_consistency_check(alpha_prime, final_beta, start_gen=gen)
-                new_edges = [(x, y) for (x, y) in checker.N_set if x in rebid_candidates]
-                # run_consistency_check already merged new_edges into checker.N_set;
-                # N_guess needs to reflect that so the next EpsScalingManager call
-                # actually bids over them.
-                added = len(checker.N_set) - len(N_guess)
+                prev_len = len(checker.N_set)
+                checker.run_consistency_check(alpha_prime, final_beta, target_gen=gen)
+                added = len(checker.N_set) - prev_len
                 N_guess = list(checker.N_set)
 
                 if added == 0:
