@@ -30,11 +30,9 @@ class AuctionOT:
     def solve(self):
         iterations = 0
         while True:
-            # calculate unassigned mass for each x
             assigned_X = np.sum(self.mu, axis=1)
             unassigned_X = self.mu_X - assigned_X
 
-            # if all mass is assigned, we are done
             if np.sum(unassigned_X) == 0:
                 break
 
@@ -60,7 +58,6 @@ class AuctionOT:
                 continue
 
             Pi_x = []
-
             if self.sparse is not None:
                 valid_y_targets = self.sparse.get_allowed_y(x)
             else:
@@ -68,12 +65,10 @@ class AuctionOT:
 
             for y in valid_y_targets:
                 for atom in self.y_atoms[y]:
-                    x_prime = atom['x']
-                    if x_prime == x:
+                    if atom['x'] == x:
                         continue
-
                     eff_cost = self.C[x, y] - atom['beta']
-                    Pi_x.append((eff_cost, y, atom['mass'], x_prime, atom['beta']))
+                    Pi_x.append((eff_cost, y, atom['mass'], atom['x'], atom['beta']))
 
             if not Pi_x:
                 continue
@@ -86,7 +81,6 @@ class AuctionOT:
 
             for i, item in enumerate(Pi_x):
                 eff_cost, y, mass_avail, x_prime, old_beta = item
-
                 claim_amount = min(mass_avail, mass_to_assign - accumulated_mass)
                 if claim_amount > 0:
                     bid_targets.append({'y': y, 'mass': claim_amount, 'eff_cost': eff_cost, 'x_prime': x_prime})
@@ -128,42 +122,40 @@ class AuctionOT:
                 atom = self.y_atoms[y][atom_idx]
                 available_mass = atom['mass']
 
-                # Higher bid_value means higher willingness to pay
-                atom_bids.sort(key=lambda b: b['bid_value'], reverse=True)
+                # Smallest bid_value wins first (most competitive price reduction)
+                atom_bids.sort(key=lambda b: b['bid_value'])
 
                 satisfied = []
-                unmet_highest_bid_val = None
+                unmet_bids = []
 
                 for bid in atom_bids:
                     if available_mass > 0:
                         claim = min(bid['mass'], available_mass)
-                        satisfied.append({'x': bid['x'], 'mass': claim, 'beta': bid['bid_value']})
+                        satisfied.append({'x': bid['x'], 'mass': claim, 'bid_value': bid['bid_value']})
                         available_mass -= claim
-                        
-                        # If a single bidder's demand wasn't completely filled, the remainder is unmet
-                        if claim < bid['mass'] and unmet_highest_bid_val is None:
-                            unmet_highest_bid_val = bid['bid_value']
+                        if claim < bid['mass']:
+                            unmet_bids.append({'x': bid['x'], 'mass': bid['mass'] - claim, 'bid_value': bid['bid_value']})
                     else:
-                        if unmet_highest_bid_val is None:
-                            unmet_highest_bid_val = bid['bid_value']
+                        unmet_bids.append(bid)
 
-                # Execute transitions on assignments
+                min_unmet_val = min(b['bid_value'] for b in unmet_bids) if unmet_bids else None
+
+                if x_prime != -1:
+                    total_won = sum(sat['mass'] for sat in satisfied)
+                    self.mu[x_prime, y] -= total_won
+
                 for sat in satisfied:
                     x = sat['x']
                     m_won = sat['mass']
-                    new_beta = sat['beta']
-
-                    if x_prime != -1:
-                        self.mu[x_prime, y] -= m_won
+                    new_beta = sat['bid_value']
+                    if min_unmet_val is not None:
+                        new_beta = min(new_beta, min_unmet_val - self.epsilon)
 
                     self.mu[x, y] += m_won
-                    atom['mass'] -= m_won
-
                     self.y_atoms[y].append({'x': x, 'mass': m_won, 'beta': new_beta})
 
-                # Strict price increase mechanism for the remaining unsatisfied atom block
-                if unmet_highest_bid_val is not None and atom['mass'] > 0:
-                    atom['beta'] = max(atom['beta'] + self.epsilon, unmet_highest_bid_val)
+                atom['mass'] = available_mass
+                if min_unmet_val is not None and atom['mass'] > 0:
+                    atom['beta'] = min(atom['beta'] - self.epsilon, min_unmet_val - self.epsilon)
 
-            # Housekeeping
             self.y_atoms[y] = [a for a in self.y_atoms[y] if a['mass'] > 0]
