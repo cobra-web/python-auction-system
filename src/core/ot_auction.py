@@ -30,6 +30,7 @@ class AuctionOT:
 
     def solve(self):
         iterations = 0
+        print(f"iter {iterations}: unassigned={np.sum(unassigned_X)}, total_atoms={sum(len(a) for a in self.y_atoms)}")
         while True:
             #calculate unassigned mass for each x
             assigned_X = np.sum(self.mu, axis=1)
