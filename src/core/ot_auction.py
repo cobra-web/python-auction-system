@@ -57,7 +57,6 @@ class AuctionOT:
                 continue
 
             Pi_x = []
-
             if self.sparse is not None:
                 valid_y_targets = self.sparse.get_allowed_y(x)
             else:
@@ -114,12 +113,12 @@ class AuctionOT:
             if not y_bids:
                 continue
 
-            # Group bids explicitly by the unique object memory reference of the atom fragment
+            # Group bids explicitly by the unique memory reference ID of the fragment
             by_atom = {}
             for bid in y_bids:
                 by_atom.setdefault(id(bid['atom_obj']), []).append(bid)
 
-            # Build a fast mapping of object IDs currently valid in the y list
+            # Map unique object IDs to their current live positions
             atom_map = {id(a): a for a in self.y_atoms[y]}
 
             for atom_id, atom_bids in by_atom.items():
@@ -130,7 +129,7 @@ class AuctionOT:
                 x_prime = atom['x']
                 available = atom['mass']
 
-                # Lowest bid_value wins first
+                # Smallest bid_value (= lowest effective cost / most aggressive price reduction) wins first
                 atom_bids.sort(key=lambda b: b['bid_value'])
 
                 satisfied = []
@@ -146,21 +145,29 @@ class AuctionOT:
                     if claim < bid['mass']:
                         unmet.append({**bid, 'mass': bid['mass'] - claim})
 
+                min_unmet_val = min(b['bid_value'] for b in unmet) if unmet else None
+
+                if x_prime != -1:
+                    total_won = sum(sat['mass'] for sat in satisfied)
+                    self.mu[x_prime, y] -= total_won
+
                 for bid in satisfied:
                     x = bid['x']
                     mass_won = bid['mass']
                     new_beta = bid['bid_value']
 
-                    if x_prime != -1:
-                        self.mu[x_prime, y] -= mass_won
+                    # Apply market-clearing pressure if there was outstanding unmet demand
+                    if min_unmet_val is not None:
+                        new_beta = min(new_beta, min_unmet_val - self.epsilon)
 
                     self.mu[x, y] += mass_won
                     atom['mass'] -= mass_won
 
                     self.y_atoms[y].append({'x': x, 'mass': mass_won, 'beta': new_beta})
 
-                if unmet:
-                    atom['beta'] -= self.epsilon
+                # If the fragment wasn't completely consumed but was contested, drop its price
+                if min_unmet_val is not None and atom['mass'] > 0:
+                    atom['beta'] = min(atom['beta'] - self.epsilon, min_unmet_val - self.epsilon)
 
-            # cleanup zero-mass atoms in y
+            # clean up zero-mass atoms in y
             self.y_atoms[y] = [a for a in self.y_atoms[y] if a['mass'] > 0]
