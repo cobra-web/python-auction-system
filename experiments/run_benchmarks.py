@@ -20,7 +20,7 @@ class SilencePrints:
         sys.stdout = self._original_stdout
 
 
-def build_matched_trees(X_pts, Y_pts, max_points_per_cell=8, max_allowed_depth=10):
+def build_matched_trees(X_pts, Y_pts, max_points_per_cell=1, max_allowed_depth=10):
     # First pass: find natural depth of each point set independently.
     probe_X = HierarchicalPartition(X_pts, max_points_per_cell=max_points_per_cell,
                                      max_allowed_depth=max_allowed_depth)
