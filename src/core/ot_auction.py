@@ -16,8 +16,9 @@ class AuctionOT:
         else:
             self.epsilon = epsilon
 
-        self.mu = np.zeros((self.N_X, self.N_Y), dtype=int) # coupling matrix
+        self.mu = np.zeros((self.N_X, self.N_Y), dtype=int)  # coupling matrix
 
+        # Track mass fragments for each y target
         self.y_atoms = []
         for y in range(self.N_Y):
             self.y_atoms.append([{'x': -1, 'mass': self.mu_Y[y], 'beta': 0.0}])
@@ -73,6 +74,7 @@ class AuctionOT:
             if not Pi_x:
                 continue
 
+            # Sort targets by lowest effective cost
             Pi_x.sort(key=lambda item: item[0])
 
             accumulated_mass = 0
@@ -105,6 +107,7 @@ class AuctionOT:
             if not y_bids:
                 continue
 
+            # Group bids by the specific atom fragment they are targeting
             by_atom = {}
             for bid in y_bids:
                 by_atom.setdefault(bid['x_prime'], []).append(bid)
@@ -122,7 +125,7 @@ class AuctionOT:
                 atom = self.y_atoms[y][atom_idx]
                 available_mass = atom['mass']
 
-                # Smallest bid_value wins first (most competitive price reduction)
+                # Lower bid_value means higher willingness to lower beta (more competitive)
                 atom_bids.sort(key=lambda b: b['bid_value'])
 
                 satisfied = []
@@ -134,10 +137,11 @@ class AuctionOT:
                         satisfied.append({'x': bid['x'], 'mass': claim, 'bid_value': bid['bid_value']})
                         available_mass -= claim
                         if claim < bid['mass']:
-                            unmet_bids.append({'x': bid['x'], 'mass': bid['mass'] - claim, 'bid_value': bid['bid_value']})
+                            unmet_bids.append({'bid_value': bid['bid_value']})
                     else:
                         unmet_bids.append(bid)
 
+                # Determine the most competitive bid value that was not completely filled
                 min_unmet_val = min(b['bid_value'] for b in unmet_bids) if unmet_bids else None
 
                 if x_prime != -1:
@@ -148,6 +152,8 @@ class AuctionOT:
                     x = sat['x']
                     m_won = sat['mass']
                     new_beta = sat['bid_value']
+                    
+                    # Ensure the new price drops cleanly to clear the market
                     if min_unmet_val is not None:
                         new_beta = min(new_beta, min_unmet_val - self.epsilon)
 
@@ -155,7 +161,9 @@ class AuctionOT:
                     self.y_atoms[y].append({'x': x, 'mass': m_won, 'beta': new_beta})
 
                 atom['mass'] = available_mass
+                # If there's still mass left in this fragment but others wanted it, push price down
                 if min_unmet_val is not None and atom['mass'] > 0:
                     atom['beta'] = min(atom['beta'] - self.epsilon, min_unmet_val - self.epsilon)
 
+            # Housekeeping: remove completely drained fragments
             self.y_atoms[y] = [a for a in self.y_atoms[y] if a['mass'] > 0]
