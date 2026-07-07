@@ -85,7 +85,7 @@ def run_comprehensive_benchmarks(N_sizes=[16, 32, 64, 128]):
                 _, dense_cost, _, _ = dense_manager.solve()
             t_dense = time.perf_counter() - t1
             print(f"{N:<10} | {'Dense OT':<15} | {dense_pairs:<12} | {dense_cost:<14.4f} | {t_dense:<12.5f}")
-        except Exception as e:
+        except Exception as e: raise
             print(f"{N:<10} | {'Dense OT':<15} | {'FAILED':<12} | {'FAILED':<14} | {'-':<12}")
 
         # Hierarchical Multiscale Auction
