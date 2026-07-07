@@ -17,24 +17,34 @@ class AuctionOT:
             self.epsilon = epsilon
 
         self.mu = np.zeros((self.N_X, self.N_Y), dtype=int) # coupling matrix
+        self.next_atom_id = 0
 
         self.y_atoms = []
         for y in range(self.N_Y):
-            self.y_atoms.append([{'x': -1, 'mass': self.mu_Y[y], 'beta': 0.0}])
+            # Assign a strictly unique ID to every atom
+            self.y_atoms.append([{
+                'id': self._get_next_id(), 
+                'x': -1, 
+                'mass': self.mu_Y[y], 
+                'beta': 0.0
+            }])
 
         if allowed_edges is not None:
             self.sparse = SparseNeighborhood(self.N_X, self.N_Y, allowed_edges)
         else:
             self.sparse = None
 
+    def _get_next_id(self):
+        assigned_id = self.next_atom_id
+        self.next_atom_id += 1
+        return assigned_id
+
     def solve(self):
         iterations = 0
         while True:
-            # calculate unassigned mass for each x
             assigned_X = np.sum(self.mu, axis=1)
             unassigned_X = self.mu_X - assigned_X
 
-            # if all mass is assigned, we are done
             if np.sum(unassigned_X) == 0:
                 break
 
@@ -57,6 +67,7 @@ class AuctionOT:
                 continue
 
             Pi_x = []
+
             if self.sparse is not None:
                 valid_y_targets = self.sparse.get_allowed_y(x)
             else:
@@ -65,11 +76,12 @@ class AuctionOT:
             for y in valid_y_targets:
                 for atom in self.y_atoms[y]:
                     x_prime = atom['x']
+                    # Do not bid against our own mass atoms to prevent inefficient competition
                     if x_prime == x:
                         continue
 
                     eff_cost = self.C[x, y] - atom['beta']
-                    Pi_x.append((eff_cost, y, atom['mass'], x_prime, atom['beta'], atom))
+                    Pi_x.append((eff_cost, y, atom['mass'], x_prime, atom['beta'], atom['id']))
 
             if not Pi_x:
                 continue
@@ -81,11 +93,11 @@ class AuctionOT:
             alpha_prime = 0
 
             for i, item in enumerate(Pi_x):
-                eff_cost, y, mass_avail, x_prime, old_beta, atom_obj = item
+                eff_cost, y, mass_avail, x_prime, old_beta, atom_id = item
 
                 claim_amount = min(mass_avail, mass_to_assign - accumulated_mass)
                 if claim_amount > 0:
-                    bid_targets.append({'y': y, 'mass': claim_amount, 'eff_cost': eff_cost, 'x_prime': x_prime, 'atom_obj': atom_obj})
+                    bid_targets.append({'y': y, 'mass': claim_amount, 'eff_cost': eff_cost, 'x_prime': x_prime, 'atom_id': atom_id})
                     accumulated_mass += claim_amount
 
                 if accumulated_mass >= mass_to_assign:
@@ -103,7 +115,7 @@ class AuctionOT:
                     'mass': target['mass'], 
                     'bid_value': bid_value, 
                     'x_prime': target['x_prime'],
-                    'atom_obj': target['atom_obj']
+                    'atom_id': target['atom_id'] # Pass the unique ID
                 })
 
         return bids
@@ -113,13 +125,13 @@ class AuctionOT:
             if not y_bids:
                 continue
 
-            # Group bids explicitly by the unique memory reference ID of the fragment
+            # Group bids strictly by the unique atom ID, NOT the owner x_prime
             by_atom = {}
             for bid in y_bids:
-                by_atom.setdefault(id(bid['atom_obj']), []).append(bid)
+                by_atom.setdefault(bid['atom_id'], []).append(bid)
 
-            # Map unique object IDs to their current live positions
-            atom_map = {id(a): a for a in self.y_atoms[y]}
+            # Fast lookup map for valid atoms
+            atom_map = {atom['id']: atom for atom in self.y_atoms[y]}
 
             for atom_id, atom_bids in by_atom.items():
                 if atom_id not in atom_map:
@@ -129,7 +141,7 @@ class AuctionOT:
                 x_prime = atom['x']
                 available = atom['mass']
 
-                # Smallest bid_value (= lowest effective cost / most aggressive price reduction) wins first
+                # Lowest bid_value (= lowest effective cost / most competitive) wins first
                 atom_bids.sort(key=lambda b: b['bid_value'])
 
                 satisfied = []
@@ -145,29 +157,28 @@ class AuctionOT:
                     if claim < bid['mass']:
                         unmet.append({**bid, 'mass': bid['mass'] - claim})
 
-                min_unmet_val = min(b['bid_value'] for b in unmet) if unmet else None
-
-                if x_prime != -1:
-                    total_won = sum(sat['mass'] for sat in satisfied)
-                    self.mu[x_prime, y] -= total_won
-
                 for bid in satisfied:
                     x = bid['x']
                     mass_won = bid['mass']
                     new_beta = bid['bid_value']
 
-                    # Apply market-clearing pressure if there was outstanding unmet demand
-                    if min_unmet_val is not None:
-                        new_beta = min(new_beta, min_unmet_val - self.epsilon)
+                    if x_prime != -1:
+                        self.mu[x_prime, y] -= mass_won
 
                     self.mu[x, y] += mass_won
                     atom['mass'] -= mass_won
 
-                    self.y_atoms[y].append({'x': x, 'mass': mass_won, 'beta': new_beta})
+                    # Create a new atom fragment for the winner with a new unique ID
+                    self.y_atoms[y].append({
+                        'id': self._get_next_id(),
+                        'x': x, 
+                        'mass': mass_won, 
+                        'beta': new_beta
+                    })
 
-                # If the fragment wasn't completely consumed but was contested, drop its price
-                if min_unmet_val is not None and atom['mass'] > 0:
-                    atom['beta'] = min(atom['beta'] - self.epsilon, min_unmet_val - self.epsilon)
+                # If there are unmet bids and mass left, price drops
+                if unmet and atom['mass'] > 0:
+                    atom['beta'] -= self.epsilon
 
-            # clean up zero-mass atoms in y
+            # Cleanup zero-mass atoms in y
             self.y_atoms[y] = [a for a in self.y_atoms[y] if a['mass'] > 0]
