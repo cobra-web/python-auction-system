@@ -1,4 +1,4 @@
-﻿import time
+    ﻿import time
 import os
 import numpy as np
 from src.utils.cost_functions import squared_euclidean
@@ -71,9 +71,6 @@ def run_comprehensive_benchmarks(N_sizes=[16, 32, 64, 128]):
             while tree_X.g < max_g:
                 tree_X.generations.append(tree_X.generations[-1])
                 tree_X.g += 1
-            while tree_Y.g < max_g:
-                tree_Y.generations.append(tree_Y.generations[-1])
-                tree_Y.g += 1
                 
             t2 = time.perf_counter()
             with SilencePrints():
