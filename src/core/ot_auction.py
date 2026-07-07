@@ -118,25 +118,54 @@ class AuctionOT:
             if not y_bids:
                 continue
 
-            #lowest bid value gets accepted
-            y_bids.sort(key=lambda b: b['bid_value'])
-
+            by_atom = {}
             for bid in y_bids:
-                x = bid['x']
-                mass_won = bid['mass']
-                new_beta = bid['bid_value']
-                x_prime = bid['x_prime']
+                by_atom.setdefault(bid['x_prime'], []).append(bid)
 
+            for x_prime, atom_bids in by_atom.items():
+                atom_idx = None
                 for i, atom in enumerate(self.y_atoms[y]):
-                    if atom['x'] == x_prime and atom['mass'] >= mass_won:
-                        if x_prime != -1:
-                            self.mu[x_prime, y] -= mass_won
-
-                        self.mu[x, y] += mass_won
-                        atom['mass'] -= mass_won
-
-                        self.y_atoms[y].append({'x': x, 'mass': mass_won, 'beta': new_beta})
+                    if atom['x'] == x_prime:
+                        atom_idx = i
                         break
 
+                if atom_idx is None:
+                    continue
+
+                atom = self.y_atoms[y][atom_idx]
+                available = atom['mass']
+
+                # Lowest bid_value (= lowest effective cost) wins first.
+                atom_bids.sort(key=lambda b: b['bid_value'])
+
+                satisfied = []
+                unmet = []
+                for bid in atom_bids:
+                    if available <= 0:
+                        unmet.append(bid)
+                        continue
+                    claim = min(bid['mass'], available)
+                    available -= claim
+                    if claim > 0:
+                        satisfied.append({**bid, 'mass': claim})
+                    if claim < bid['mass']:
+                        unmet.append({**bid, 'mass': bid['mass'] - claim})
+
+                for bid in satisfied:
+                    x = bid['x']
+                    mass_won = bid['mass']
+                    new_beta = bid['bid_value']
+
+                    if x_prime != -1:
+                        self.mu[x_prime, y] -= mass_won
+
+                    self.mu[x, y] += mass_won
+                    atom['mass'] -= mass_won
+
+                    self.y_atoms[y].append({'x': x, 'mass': mass_won, 'beta': new_beta})
+
+                if unmet:
+                    atom['beta'] -= self.epsilon
+
             #cleanup zero-mass atoms in y
-            self.y_atoms[y] = [atom for atom in self.y_atoms[y] if atom['mass'] > 0]
+            self.y_atoms[y] = [a for a in self.y_atoms[y] if a['mass'] > 0]
