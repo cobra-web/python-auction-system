@@ -92,22 +92,11 @@ class HierarchicalMultiscaleSolver:
 
             checker.N_set = set(N_guess)
 
-            prev_alpha = None
-            prev_beta = None
-
             # Section 4.2
             while True:
-                solve_kwargs = dict(mu_X=mu_X_fine, mu_Y=mu_Y_fine, allowed_edges=N_guess)
-                if prev_alpha is not None:
-                    # Warm-start: only new edges from the last expansion round
-                    # need fresh bidding, the rest should already be near
-                    # complementary-slack. This assumes AuctionOT/EpsScalingManager
-                    # accept initial dual arrays - wire these kwargs to match
-                    # whatever your AuctionOT constructor exposes.
-                    solve_kwargs["initial_alpha"] = prev_alpha
-                    solve_kwargs["initial_beta"] = prev_beta
-
-                hybrid_manager = EpsScalingManager(AuctionOT, C_fine, **solve_kwargs)
+                hybrid_manager = EpsScalingManager(
+                    AuctionOT, C_fine, mu_X=mu_X_fine, mu_Y=mu_Y_fine, allowed_edges=N_guess
+                )
                 current_mu, total_cost, total_iters, final_beta = hybrid_manager.solve()
 
                 alpha = np.zeros(len(mu_X_fine))
@@ -129,7 +118,6 @@ class HierarchicalMultiscaleSolver:
                     break
                 else:
                     print(f"  [Boundary Violation] Found {added} missing edges. Expanding neighborhood...")
-                    prev_alpha, prev_beta = alpha, final_beta
 
             self.last_N_guess = N_guess
 
