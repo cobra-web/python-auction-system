@@ -76,6 +76,7 @@ def run_comprehensive_benchmarks(N_sizes=[16, 32, 64, 128]):
             print(f"{N:<10} | {'LAP Auction':<15} | {dense_pairs:<12} | {lap_cost:<14.4f} | {t_lap:<12.5f}")
         except Exception as e:
             print(f"{N:<10} | {'LAP Auction':<15} | {'FAILED':<12} | {'FAILED':<14} | {'-':<12}")
+            import traceback; traceback.print_exc()
 
         # Dense Auction (General OT)
         try:
@@ -85,8 +86,9 @@ def run_comprehensive_benchmarks(N_sizes=[16, 32, 64, 128]):
                 _, dense_cost, _, _ = dense_manager.solve()
             t_dense = time.perf_counter() - t1
             print(f"{N:<10} | {'Dense OT':<15} | {dense_pairs:<12} | {dense_cost:<14.4f} | {t_dense:<12.5f}")
-        except Exception as e: raise
+        except Exception as e:
             print(f"{N:<10} | {'Dense OT':<15} | {'FAILED':<12} | {'FAILED':<14} | {'-':<12}")
+            import traceback; traceback.print_exc()
 
         # Hierarchical Multiscale Auction
         try:
@@ -104,6 +106,7 @@ def run_comprehensive_benchmarks(N_sizes=[16, 32, 64, 128]):
             print(f"{N:<10} | {'Hierarchical OT':<15} | {hier_pairs:<12} | {hier_cost:<14.4f} | {t_hier:<12.5f}")
         except Exception as e:
             print(f"{N:<10} | {'Hierarchical OT':<15} | {'FAILED':<12} | {'FAILED':<14} | {'-':<12}")
+            import traceback; traceback.print_exc()
 
         print("-" * 80)
 
