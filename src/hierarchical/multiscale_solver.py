@@ -5,6 +5,7 @@ from src.hierarchical.consistency import ConsistencyChecker
 
 
 class HierarchicalMultiscaleSolver:
+    
     def __init__(self, tree_X, tree_Y, cost_matrix, mu_X, mu_Y):
         self.tree_X = tree_X
         self.tree_Y = tree_Y
@@ -42,6 +43,51 @@ class HierarchicalMultiscaleSolver:
 
         return C_hat, mu_X_hat, mu_Y_hat
 
+    def _induce_sparse_neighborhood(self, coarse_mu, gen_coarse):
+        gen_fine = gen_coarse - 1
+        
+        cells_X_coarse = self.tree_X.generations[gen_coarse]
+        cells_Y_coarse = self.tree_Y.generations[gen_coarse]
+        
+        cells_X_fine = self.tree_X.generations[gen_fine]
+        cells_Y_fine = self.tree_Y.generations[gen_fine]
+        
+        # Create mapping from fine-level cell to index
+        cell_to_idx_X = {cell: idx for idx, cell in enumerate(cells_X_fine)}
+        cell_to_idx_Y = {cell: idx for idx, cell in enumerate(cells_Y_fine)}
+        
+        allowed_edges = []
+        
+        # Iterate over all coarse-level pairs
+        for i in range(len(cells_X_coarse)):
+            for j in range(len(cells_Y_coarse)):
+                # Only expand pairs with nonzero mass in the coarse solution
+                if coarse_mu[i, j] > 1e-9:
+                    parent_a = cells_X_coarse[i]
+                    parent_b = cells_Y_coarse[j]
+                    
+                    # Get children of coarse cells (or self if no children)
+                    if parent_a.children and len(parent_a.children) > 0:
+                        children_a = parent_a.children
+                    else:
+                        children_a = [parent_a]
+                    
+                    if parent_b.children and len(parent_b.children) > 0:
+                        children_b = parent_b.children
+                    else:
+                        children_b = [parent_b]
+                    
+                    # Expand to all combinations of children at fine level
+                    for child_a in children_a:
+                        for child_b in children_b:
+                            # Check that children are actually in the fine level
+                            if child_a in cell_to_idx_X and child_b in cell_to_idx_Y:
+                                fine_x = cell_to_idx_X[child_a]
+                                fine_y = cell_to_idx_Y[child_b]
+                                allowed_edges.append((fine_x, fine_y))
+        
+        return allowed_edges
+
     def solve(self):
         coarsest_gen = self.g - 1
         print(f"Starting Hierarchical Multiscale Solve (depth g={self.g})")
@@ -76,6 +122,7 @@ class HierarchicalMultiscaleSolver:
                 parent_cell = fine_cell.parent
                 if parent_cell in cell_to_idx_Y_coarse:
                     parent_idx = cell_to_idx_Y_coarse[parent_cell]
+                    # Initialize with parent's dual value (conservative warm start)
                     current_beta_for_level[i] = current_beta[parent_idx]
 
             # Update consistency checker for this level
