@@ -2,7 +2,7 @@ import numpy as np
 
 class EpsScalingManager:
     
-    def __init__(self, solver_class, cost_matrix, theta=5.0, target_eps=None, initial_beta=None, **solver_kwargs)
+    def __init__(self, solver_class, cost_matrix, theta=5.0, target_eps=None, initial_beta=None, **solver_kwargs):
         self.solver_class = solver_class
         self.C_original = np.array(cost_matrix, dtype=float)  # Store original for cost computation
         self.C_normalized = self.C_original.copy()  # Will be normalized for solver
