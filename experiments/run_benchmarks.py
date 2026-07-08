@@ -65,26 +65,34 @@ def generate_problem_instance(N, seed=None):
     # Compute squared Euclidean distance cost
     C = squared_euclidean(X_pts, Y_pts)
     
-    # Generate random masses
-    mu_X = np.random.randint(1, 5, size=N).astype(float)
-    mu_Y = np.random.randint(1, 5, size=N).astype(float)
+    # Generate random masses in range [1, 5)
+    mu_X_raw = np.random.randint(1, 5, size=N).astype(float)
+    mu_Y_raw = np.random.randint(1, 5, size=N).astype(float)
     
-    # Balance the problem: ensure total supply = total demand
-    diff = np.sum(mu_X) - np.sum(mu_Y)
-    if diff > 0:
-        mu_Y[0] += diff
-    elif diff < 0:
-        mu_X[0] += abs(diff)
+    # ===== CRITICAL: Balance the masses to have exact equal sums =====
+    # Method: Scale both to have the same total mass (use their average)
+    total_X = np.sum(mu_X_raw)
+    total_Y = np.sum(mu_Y_raw)
+    total_avg = (total_X + total_Y) / 2.0
+    
+    # Scale both mass vectors to the average total
+    # This ensures: sum(mu_X) == sum(mu_Y) == total_avg
+    mu_X = mu_X_raw * (total_avg / total_X)
+    mu_Y = mu_Y_raw * (total_avg / total_Y)
+    
+    # Verify balance (should be exact up to floating point error)
+    assert np.isclose(np.sum(mu_X), np.sum(mu_Y), rtol=1e-10), \
+        f"Mass imbalance: sum(mu_X)={np.sum(mu_X)}, sum(mu_Y)={np.sum(mu_Y)}"
     
     return X_pts, Y_pts, C, mu_X, mu_Y
 
 
 def run_comprehensive_benchmarks(N_sizes=[16, 32, 64, 128], base_seed=42, verbose=True):
-    print("\n" + "="*100)
+    print("\n" + "="*110)
     print("BACHELOR THESIS: OPTIMAL TRANSPORT SOLVER BENCHMARK")
-    print("="*100)
-    print(f"{'Scale':<6} | {'Solver':<18} | {'Active Pairs':<15} | {'Computed Cost':<16} | {'Runtime (s)':<12}")
-    print("-"*100)
+    print("="*110)
+    print(f"{'Scale':<6} | {'Solver':<18} | {'Active Pairs':<15} | {'Computed Cost':<18} | {'Runtime (s)':<12}")
+    print("-"*110)
     
     results = {}  # Store results for comparison
     
@@ -94,9 +102,9 @@ def run_comprehensive_benchmarks(N_sizes=[16, 32, 64, 128], base_seed=42, verbos
         instance_seed = base_seed + N
         X_pts, Y_pts, C, mu_X, mu_Y = generate_problem_instance(N, seed=instance_seed)
         
-        # Store reference for later validation
-        total_supply = np.sum(mu_X)
-        total_demand = np.sum(mu_Y)
+        # Verify balance
+        if verbose:
+            print(f"  [Problem N={N}] sum(mu_X) = {np.sum(mu_X):.6f}, sum(mu_Y) = {np.sum(mu_Y):.6f}")
         
         dense_pairs = N * N
         results[N] = {}
@@ -110,9 +118,9 @@ def run_comprehensive_benchmarks(N_sizes=[16, 32, 64, 128], base_seed=42, verbos
             t_lap = time.perf_counter() - t0
             
             results[N]['LAP'] = {'cost': lap_cost, 'time': t_lap, 'pairs': dense_pairs}
-            print(f"{N:<6} | {'LAP Auction':<18} | {dense_pairs:<15} | {lap_cost:<16.8f} | {t_lap:<12.5f}")
+            print(f"{N:<6} | {'LAP Auction':<18} | {dense_pairs:<15} | {lap_cost:<18.8f} | {t_lap:<12.5f}")
         except Exception as e:
-            print(f"{N:<6} | {'LAP Auction':<18} | {'FAILED':<15} | {'FAILED':<16} | {'-':<12}")
+            print(f"{N:<6} | {'LAP Auction':<18} | {'FAILED':<15} | {'FAILED':<18} | {'-':<12}")
             if verbose:
                 print(f"  ERROR: {type(e).__name__}: {str(e)}")
                 traceback.print_exc()
@@ -120,39 +128,42 @@ def run_comprehensive_benchmarks(N_sizes=[16, 32, 64, 128], base_seed=42, verbos
         # ===== DENSE OT AUCTION =====
         try:
             if verbose:
-                print(f"  [Dense OT] Creating EpsScalingManager with cost matrix shape {C.shape}, mu_X shape {mu_X.shape}, mu_Y shape {mu_Y.shape}")
+                print(f"  [Dense OT] Starting with cost shape {C.shape}, mu_X {mu_X.shape}, mu_Y {mu_Y.shape}")
             
             t1 = time.perf_counter()
             with SilencePrints():
-                # CRITICAL: Pass mu_X and mu_Y as keyword arguments to be forwarded to AuctionOT
+                # Pass mu_X and mu_Y as keyword arguments
                 dense_manager = EpsScalingManager(
                     AuctionOT, 
                     C, 
                     mu_X=mu_X, 
                     mu_Y=mu_Y
                 )
-                if verbose:
-                    print(f"  [Dense OT] Manager created. Calling solve()...")
                 dense_mu, dense_cost, dense_iters, _ = dense_manager.solve()
             t_dense = time.perf_counter() - t1
             
             # Verify coupling is valid
             assigned_X = np.sum(dense_mu, axis=1)
             assigned_Y = np.sum(dense_mu, axis=0)
-            if verbose:
-                print(f"  [Dense OT] Assignment check: assigned_X shape {assigned_X.shape}, mu_X shape {mu_X.shape}")
-                print(f"  [Dense OT] Supply deficit: {np.max(np.abs(assigned_X - mu_X)):.2e}")
-                print(f"  [Dense OT] Demand deficit: {np.max(np.abs(assigned_Y - mu_Y)):.2e}")
             
-            assert np.allclose(assigned_X, mu_X, atol=1e-6), f"Dense OT: supply not satisfied"
-            assert np.allclose(assigned_Y, mu_Y, atol=1e-6), f"Dense OT: demand not satisfied"
+            supply_deficit = np.max(np.abs(assigned_X - mu_X))
+            demand_deficit = np.max(np.abs(assigned_Y - mu_Y))
+            
+            if verbose:
+                print(f"  [Dense OT] Supply deficit: {supply_deficit:.2e}, Demand deficit: {demand_deficit:.2e}")
+            
+            assert np.allclose(assigned_X, mu_X, atol=1e-6), \
+                f"Dense OT: supply not satisfied (deficit={supply_deficit:.2e})"
+            assert np.allclose(assigned_Y, mu_Y, atol=1e-6), \
+                f"Dense OT: demand not satisfied (deficit={demand_deficit:.2e})"
             
             results[N]['Dense'] = {'cost': dense_cost, 'time': t_dense, 'pairs': dense_pairs, 'iters': dense_iters}
-            print(f"{N:<6} | {'Dense OT':<18} | {dense_pairs:<15} | {dense_cost:<16.8f} | {t_dense:<12.5f}")
+            print(f"{N:<6} | {'Dense OT':<18} | {dense_pairs:<15} | {dense_cost:<18.8f} | {t_dense:<12.5f}")
         except Exception as e:
-            print(f"{N:<6} | {'Dense OT':<18} | {'FAILED':<15} | {'FAILED':<16} | {'-':<12}")
+            print(f"{N:<6} | {'Dense OT':<18} | {'FAILED':<15} | {'FAILED':<18} | {'-':<12}")
             print(f"  ERROR: {type(e).__name__}: {str(e)}")
-            traceback.print_exc()
+            if verbose:
+                traceback.print_exc()
 
         # ===== HIERARCHICAL MULTISCALE OT =====
         try:
@@ -169,31 +180,41 @@ def run_comprehensive_benchmarks(N_sizes=[16, 32, 64, 128], base_seed=42, verbos
 
             # Compute cost using ORIGINAL (unnormalized) cost matrix
             hier_cost = np.sum(hier_mu * C)
-            hier_pairs = len(multiscale_solver.last_N_guess)
+            hier_pairs = len(multiscale_solver.last_N_guess) if hasattr(multiscale_solver, 'last_N_guess') else 0
             
             # Verify coupling is valid
             assigned_X = np.sum(hier_mu, axis=1)
             assigned_Y = np.sum(hier_mu, axis=0)
-            if verbose:
-                print(f"  [Hierarchical] Supply deficit: {np.max(np.abs(assigned_X - mu_X)):.2e}")
-                print(f"  [Hierarchical] Demand deficit: {np.max(np.abs(assigned_Y - mu_Y)):.2e}")
             
-            assert np.allclose(assigned_X, mu_X, atol=1e-6), f"Hierarchical: supply not satisfied"
-            assert np.allclose(assigned_Y, mu_Y, atol=1e-6), f"Hierarchical: demand not satisfied"
+            supply_deficit = np.max(np.abs(assigned_X - mu_X))
+            demand_deficit = np.max(np.abs(assigned_Y - mu_Y))
+            
+            if verbose:
+                print(f"  [Hierarchical] Supply deficit: {supply_deficit:.2e}, Demand deficit: {demand_deficit:.2e}")
+                print(f"  [Hierarchical] Active pairs: {hier_pairs}/{dense_pairs} ({100.0*hier_pairs/dense_pairs:.1f}% density)")
+            
+            assert np.allclose(assigned_X, mu_X, atol=1e-6), \
+                f"Hierarchical: supply not satisfied (deficit={supply_deficit:.2e})"
+            assert np.allclose(assigned_Y, mu_Y, atol=1e-6), \
+                f"Hierarchical: demand not satisfied (deficit={demand_deficit:.2e})"
 
             results[N]['Hierarchical'] = {'cost': hier_cost, 'time': t_hier, 'pairs': hier_pairs}
-            print(f"{N:<6} | {'Hierarchical OT':<18} | {hier_pairs:<15} | {hier_cost:<16.8f} | {t_hier:<12.5f}")
+            print(f"{N:<6} | {'Hierarchical OT':<18} | {hier_pairs:<15} | {hier_cost:<18.8f} | {t_hier:<12.5f}")
         except Exception as e:
-            print(f"{N:<6} | {'Hierarchical OT':<18} | {'FAILED':<15} | {'FAILED':<16} | {'-':<12}")
+            print(f"{N:<6} | {'Hierarchical OT':<18} | {'FAILED':<15} | {'FAILED':<18} | {'-':<12}")
             print(f"  ERROR: {type(e).__name__}: {str(e)}")
-            traceback.print_exc()
+            if verbose:
+                traceback.print_exc()
 
-        print("-"*100)
+        print("-"*110)
 
     # ===== VALIDATION AND COMPARISON =====
-    print("\n" + "="*100)
+    print("\n" + "="*110)
     print("COST VALIDATION (Dense OT should match Hierarchical OT)")
-    print("="*100)
+    print("="*110)
+    
+    match_count = 0
+    mismatch_count = 0
     
     for N in N_sizes:
         if 'Dense' in results[N] and 'Hierarchical' in results[N]:
@@ -202,18 +223,27 @@ def run_comprehensive_benchmarks(N_sizes=[16, 32, 64, 128], base_seed=42, verbos
             cost_diff = abs(dense_cost - hier_cost)
             rel_diff = cost_diff / dense_cost if dense_cost != 0 else 0
             
+            # Threshold for matching: 1e-5 (0.001%) relative difference
             match_status = "✓ MATCH" if rel_diff < 1e-5 else "✗ MISMATCH"
-            print(f"N={N:<4} | Dense: {dense_cost:<16.8f} | Hier: {hier_cost:<16.8f} | "
+            if rel_diff < 1e-5:
+                match_count += 1
+            else:
+                mismatch_count += 1
+            
+            print(f"N={N:<4} | Dense: {dense_cost:<18.8f} | Hier: {hier_cost:<18.8f} | "
                   f"Diff: {cost_diff:<12.2e} | Rel: {rel_diff:<12.2e} | {match_status}")
         else:
-            print(f"N={N:<4} | INCOMPLETE DATA")
+            print(f"N={N:<4} | INCOMPLETE DATA (one or both solvers failed)")
+            mismatch_count += 1
     
-    print("="*100 + "\n")
+    print("="*110)
+    print(f"SUMMARY: {match_count} matches, {mismatch_count} mismatches")
+    print("="*110 + "\n")
     
     return results
 
 
 if __name__ == "__main__":
-    # Run benchmarks with explicit error reporting (verbose=True shows all error details)
-    # Change to verbose=False if you just want clean output
+    # Run benchmarks with explicit error reporting
+    # Change verbose=False for cleaner output without debug info
     results = run_comprehensive_benchmarks(N_sizes=[16, 32, 64, 128], base_seed=42, verbose=True)
