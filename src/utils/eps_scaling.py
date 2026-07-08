@@ -59,18 +59,10 @@ class EpsScalingManager:
         return final_assignment, true_cost, total_iterations, best_beta
 
     def _inject_beta(self, solver, old_beta):
-        if hasattr(solver, 'y_atoms'):
-            for y in range(solver.N_Y):
-                for atom in solver.y_atoms[y]:
-                    atom['beta'] = old_beta[y]
-        else:
-            solver.beta = np.copy(old_beta)
+        solver.beta = np.copy(old_beta)
 
     def _extract_beta(self, solver):
-        if hasattr(solver, 'y_atoms'):
-            return np.array([min(atom['beta'] for atom in atoms) if atoms else 0.0 for atoms in solver.y_atoms])
-        else:
-            return np.copy(solver.beta)
+        return np.copy(solver.beta)
 
     def _calculate_final_cost(self, assignment):
         if assignment.ndim == 1: 
