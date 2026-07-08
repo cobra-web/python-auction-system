@@ -167,7 +167,7 @@ class HierarchicalMultiscaleSolver:
                     break
                 else:
                     print(f"  [Consistency Iter {consistency_iterations}] Found {added} new edges "
-                          f"(N_guess: {prev_len} → {len(N_guess)})")
+                          f"(N_guess: {prev_len} -> {len(N_guess)})")
 
                 # Safety: stop if neighborhood grows too dense
                 if len(N_guess) > len(mu_X_fine) * len(mu_Y_fine) * 0.5:
