@@ -73,9 +73,6 @@ class HierarchicalMultiscaleSolver:
         coarsest_gen = self.g - 1
         print(f"Starting Multiscale Solve. Root Generation: {coarsest_gen}")
 
-        # One checker for the whole solve: cell ids are global and unique across
-        # the tree, so c_hat_cache stays valid across generations instead of
-        # being rebuilt from scratch at every refinement step.
         checker = ConsistencyChecker(self.tree_X, self.tree_Y, self.C, initial_sparse_N=[])
 
         C_fine, mu_X_fine, mu_Y_fine = self._build_coarsened_problem(coarsest_gen)
@@ -92,18 +89,38 @@ class HierarchicalMultiscaleSolver:
 
             checker.N_set = set(N_guess)
 
+            cells_Y_fine = self.tree_Y.generations[gen]
+            cells_Y_coarse = self.tree_Y.generations[gen + 1]
+            cell_to_idx_Y_coarse = {cell: idx for idx, cell in enumerate(cells_Y_coarse)}
+
+            current_beta_for_level = np.zeros(len(cells_Y_fine), dtype=float)
+
+            for i, fine_cell in enumerate(cells_Y_fine):
+                parent_cell = fine_cell.parent
+                if parent_cell in cell_to_idx_Y_coarse:
+                    parent_idx = cell_to_idx_Y_coarse[parent_cell]
+                    current_beta_for_level[i] = final_beta[parent_idx]
+            # ================================
+
             # Section 4.2
             while True:
+                # Pass the warm start into the manager
                 hybrid_manager = EpsScalingManager(
-                    AuctionOT, C_fine, mu_X=mu_X_fine, mu_Y=mu_Y_fine, allowed_edges=N_guess
+                    AuctionOT, C_fine, mu_X=mu_X_fine, mu_Y=mu_Y_fine, 
+                    allowed_edges=N_guess,
+                    initial_beta=current_beta_for_level 
                 )
                 current_mu, total_cost, total_iters, final_beta = hybrid_manager.solve()
 
+                current_beta_for_level = final_beta
+
                 alpha = np.zeros(len(mu_X_fine))
                 for x in range(len(mu_X_fine)):
-                    assigned_ys = np.where(current_mu[x] > 0)[0]
-                    if len(assigned_ys) > 0:
-                        alpha[x] = np.min(C_fine[x, assigned_ys] - final_beta[assigned_ys])
+                    valid_ys = [y for (x_prime, y) in N_guess if x_prime == x]
+                    if len(valid_ys) > 0:
+                        alpha[x] = np.min(C_fine[x, valid_ys] - final_beta[valid_ys])
+                    else:
+                        alpha[x] = 0.0
 
                 target_eps = hybrid_manager.target_eps
                 alpha_prime = alpha + target_eps
@@ -123,7 +140,6 @@ class HierarchicalMultiscaleSolver:
 
         print("\nMultiscale optimization complete. Reconstructing original array alignments...")
 
-        # restore original matrix coordinates
         orig_idx_X = [cell.point_indices[0] for cell in self.tree_X.generations[0]]
         orig_idx_Y = [cell.point_indices[0] for cell in self.tree_Y.generations[0]]
 
