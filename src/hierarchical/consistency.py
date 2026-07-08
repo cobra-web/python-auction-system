@@ -1,4 +1,3 @@
-# src/hierarchical/consistency.py
 import numpy as np
 
 class ConsistencyChecker:
@@ -49,8 +48,10 @@ class ConsistencyChecker:
         if cache_key in self.c_hat_cache:
             return self.c_hat_cache[cache_key]
 
-        if cell_a.generation == 0 and cell_b.generation == 0:
-            # Leaf level: look up actual cost
+        if not cell_a.children and not cell_b.children:
+            # Both are true leaves in the tree (regardless of nominal generation
+            # number -- a branch may stop splitting before generation 0 and get
+            # replicated downward). Use their actual point sets directly.
             idx_a = cell_a.point_indices
             idx_b = cell_b.point_indices
             val = np.min(self.C[np.ix_(idx_a, idx_b)])
@@ -107,8 +108,12 @@ class ConsistencyChecker:
         if c_hat_val - b_hat >= a_prime_hat:
             return []
 
-        # === BASE CASE: At target generation, check individual pairs ===
-        if cell_a.generation == target_gen and cell_b.generation == target_gen:
+        # === BASE CASE: reached target generation, OR this branch stopped
+        # splitting earlier (childless) and can't be refined any further ===
+        cell_a_is_terminal = (cell_a.generation == target_gen) or (not cell_a.children)
+        cell_b_is_terminal = (cell_b.generation == target_gen) or (not cell_b.children)
+
+        if cell_a_is_terminal and cell_b_is_terminal:
             x = self._cell_to_idx_X[cell_a]
             y = self._cell_to_idx_Y[cell_b]
             found_edges = []
