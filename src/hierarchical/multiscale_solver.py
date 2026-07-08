@@ -100,11 +100,11 @@ class HierarchicalMultiscaleSolver:
         # ===== COARSEST LEVEL: Solve OT on coarsest partitions =====
         C_hat, mu_X_hat, mu_Y_hat = self._build_coarsened_problem(coarsest_gen)
 
-        # Use ε-scaling manager on coarsest level
+        # Use eps-scaling manager on coarsest level
         manager = EpsScalingManager(AuctionOT, C_hat, mu_X=mu_X_hat, mu_Y=mu_Y_hat)
         current_mu, _, _, final_beta = manager.solve()
         
-        # FIX: Speichere beta der gröbsten Ebene unskaliert (Original-Metrik)
+        # FIX: Scale beta up to the original unnormalized metric
         max_c_coarsest = np.max(np.abs(C_hat)) if np.max(np.abs(C_hat)) > 0 else 1.0
         current_beta = final_beta * max_c_coarsest
 
@@ -116,10 +116,10 @@ class HierarchicalMultiscaleSolver:
             N_guess = self._induce_sparse_neighborhood(current_mu, gen + 1)
             C_fine, mu_X_fine, mu_Y_fine = self._build_coarsened_problem(gen)
             
-            # FIX: Bestimme den Normierungsfaktor der aktuellen feinen Ebene
+            # FIX: Determine the normalization factor for the current fine level
             max_c_fine = np.max(np.abs(C_fine)) if np.max(np.abs(C_fine)) > 0 else 1.0
 
-            # Initialize β for fine level using parent's β values
+            # Initialize β for fine level using parent's unscaled β values
             cells_Y_fine = self.tree_Y.generations[gen]
             cells_Y_coarse = self.tree_Y.generations[gen + 1]
             cell_to_idx_Y_coarse = {cell: idx for idx, cell in enumerate(cells_Y_coarse)}
@@ -129,10 +129,9 @@ class HierarchicalMultiscaleSolver:
                 parent_cell = fine_cell.parent
                 if parent_cell in cell_to_idx_Y_coarse:
                     parent_idx = cell_to_idx_Y_coarse[parent_cell]
-                    # Parent's dual-Wert liegt in unskalierter Metrik vor
                     current_beta_for_level_unscaled[i] = current_beta[parent_idx]
 
-            # FIX: Skaliere beta für den EpsScalingManager dieser Ebene herunter
+            # FIX: Scale beta down for the EpsScalingManager
             current_beta_for_level = current_beta_for_level_unscaled / max_c_fine
 
             # Update consistency checker for this level
@@ -144,7 +143,7 @@ class HierarchicalMultiscaleSolver:
             while consistency_iterations < 100:
                 consistency_iterations += 1
 
-                # Solve OT at this level with warm-start (erwartet normiertes beta)
+                # Solve OT at this level with normalized warm-start
                 hybrid_manager = EpsScalingManager(
                     AuctionOT, C_fine, mu_X=mu_X_fine, mu_Y=mu_Y_fine,
                     allowed_edges=N_guess,
@@ -154,7 +153,7 @@ class HierarchicalMultiscaleSolver:
                 current_mu, total_cost, total_iters, final_beta = hybrid_manager.solve()
                 current_beta_for_level = final_beta.copy()
 
-                # FIX: Rekonstruiere unnormierte Variablen für den Konsistenz-Checker
+                # FIX: Reconstruct unnormalized duals for the consistency check
                 final_beta_unnormalized = final_beta * max_c_fine
                 target_eps_unnormalized = hybrid_manager.target_eps * max_c_fine
 
@@ -165,13 +164,13 @@ class HierarchicalMultiscaleSolver:
                     if len(valid_ys) > 0:
                         alpha[x] = np.min(C_fine[x, valid_ys] - final_beta_unnormalized[valid_ys])
 
-                # Add ε-slack (alles im unnormierten Raum)
+                # Add unnormalized epsilon-slack
                 alpha_prime = alpha + target_eps_unnormalized
 
                 # ===== CONSISTENCY CHECK: Expand N_guess if needed =====
                 prev_len = len(checker.N_set)
                 
-                # FIX: Übergabe des unnormierten final_beta passend zu alpha_prime und checker.C
+                # FIX: Pass unnormalized beta to match C_hat and alpha_prime
                 checker.run_consistency_check(alpha_prime, final_beta_unnormalized, target_gen=gen)
                 added = len(checker.N_set) - prev_len
                 N_guess = list(checker.N_set)
@@ -184,18 +183,19 @@ class HierarchicalMultiscaleSolver:
                     print(f"  [Consistency Iter {consistency_iterations}] Found {added} new edges "
                           f"(N_guess: {prev_len} -> {len(N_guess)})")
 
-                # Safety: stop if neighborhood grows too dense
+                # Safety check
                 if len(N_guess) > len(mu_X_fine) * len(mu_Y_fine) * 0.5:
                     print(f"  WARNING: Neighborhood at {100.0*len(N_guess)/(len(mu_X_fine)*len(mu_Y_fine)):.1f}% density; stopping expansion")
                     break
 
             self.last_N_guess = N_guess
-            # FIX: Speichere das unnormierte beta für die nächste Iteration der äußeren Schleife
+            
+            # FIX: Store unnormalized beta for the next outer generation loop
             current_beta = final_beta * max_c_fine
 
         print("\nMultiscale optimization complete. Reconstructing solution at finest scale...")
 
-        # Reconstruct solution in original (finest-scale) coordinates.
+        # Reconstruct solution in original (finest-scale) coordinates
         cells_X_fine = self.tree_X.generations[0]
         cells_Y_fine = self.tree_Y.generations[0]
 
@@ -204,18 +204,18 @@ class HierarchicalMultiscaleSolver:
         for i, cell_a in enumerate(cells_X_fine):
             idx_a = cell_a.point_indices
             total_a = np.sum(self.mu_X[idx_a])
-            if total_a < TOL:
+            if total_a < 1e-9:
                 continue
             weights_a = self.mu_X[idx_a] / total_a
 
             for j, cell_b in enumerate(cells_Y_fine):
                 cell_mass = current_mu[i, j]
-                if cell_mass < TOL:
+                if cell_mass < 1e-9:
                     continue
 
                 idx_b = cell_b.point_indices
                 total_b = np.sum(self.mu_Y[idx_b])
-                if total_b < TOL:
+                if total_b < 1e-9:
                     continue
                 weights_b = self.mu_Y[idx_b] / total_b
 
