@@ -74,6 +74,10 @@ class AuctionOT:
         return available
 
     def _displace_mass_from_others(self, x, y, amount_to_displace, TOL=1e-7):
+        # NOTE: mass is tracked solely via self.mu. solve() recomputes
+        # unassigned mass fresh each iteration as self.mu_X - sum(self.mu, axis=1),
+        # so reducing self.mu[x_prime, y] here is itself the "refund" —
+        # x_prime shows up as unassigned again on the next loop pass.
         actual_displaced = 0.0
         
         # 3. Strict Displacement Loop over all other owners
@@ -87,7 +91,6 @@ class AuctionOT:
                 
                 # 4. STRICT BANK TRANSACTION (Conservation of Mass)
                 self.mu[x_prime, y] -= displaced
-                self.unassigned_X[x_prime] += displaced # MUST be added back exactly!
                 
                 amount_to_displace -= displaced
                 actual_displaced += displaced
@@ -113,7 +116,6 @@ class AuctionOT:
         if amount <= space_remaining:
             # Simplest case: y has enough empty space to hold all of x's bid
             self.mu[x, y] += amount
-            self.unassigned_X[x] -= amount
             return amount
         else:
             # y is full (or will be). We fill the empty space, then displace the rest
@@ -127,7 +129,6 @@ class AuctionOT:
             
             # Finalize x's assignment strictly
             self.mu[x, y] += actual_assigned
-            self.unassigned_X[x] -= actual_assigned
             return actual_assigned
 
     
