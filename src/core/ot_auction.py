@@ -77,7 +77,7 @@ class AuctionOT:
         actual_displaced = 0.0
         
         # 3. Strict Displacement Loop over all other owners
-        for x_prime in range(self.mu.shape):
+        for x_prime in range(self.mu.shape[0]):
             if x_prime == x:
                 continue # Mathematical rule: A node must NEVER displace itself
                 
