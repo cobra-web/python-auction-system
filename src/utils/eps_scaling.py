@@ -40,11 +40,11 @@ class EpsScalingManager:
         final_assignment = None
         total_iterations = 0
         
-        print(f"Starting ε-scaling. Start ε: {current_eps:.6f}, Target ε: {self.target_eps:.6f}")
+        print(f"Starting eps-scaling. Start eps: {current_eps:.6f}, Target eps: {self.target_eps:.6f}")
         
-        # ε-scaling loop: progressively decrease epsilon
+        # eps-scaling loop: progressively decrease epsilon
         while current_eps >= self.target_eps:
-            print(f"  -> Solving for ε = {current_eps:.6f}")
+            print(f"  -> Solving for eps = {current_eps:.6f}")
             
             # Create solver with normalized cost matrix
             # CRITICAL: Pass solver_kwargs which contain mu_X, mu_Y, allowed_edges, etc.
@@ -91,7 +91,7 @@ class EpsScalingManager:
             # Reduce epsilon for next iteration
             current_eps = max(current_eps / self.theta, self.target_eps)
         
-        print(f"ε-scaling complete in {total_iterations} total iterations.")
+        print(f"eps-scaling complete in {total_iterations} total iterations.")
         
         # Compute final cost using ORIGINAL cost matrix (not normalized)
         true_cost = self._calculate_final_cost(final_assignment)
