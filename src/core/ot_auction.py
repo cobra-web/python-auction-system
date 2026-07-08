@@ -73,84 +73,64 @@ class AuctionOT:
         
         return available
 
-    def _displace_mass_from_others(self, y, x_current, mass_needed):
-        mass_freed = 0.0
-        mass_to_free = mass_needed
+    def _displace_mass_from_others(self, x, y, amount_to_displace, TOL=1e-7):
+        actual_displaced = 0.0
         
-        # Collect all sources holding mass at y (excluding x_current)
-        # Format: (mass_at_y, x_prime)
-        holders_with_mass = []
-        for x_prime in range(self.N_X):
-            if x_prime != x_current:
-                mass_held = self.mu[x_prime, y]
-                # Only consider if mass is above tolerance
-                if mass_held > TOL:
-                    holders_with_mass.append((mass_held, x_prime))
-        
-        # Sort by mass in descending order (take from largest holders first - greedy)
-        holders_with_mass.sort(reverse=True, key=lambda item: item[0])
-        
-        # Displace mass greedily from largest holders
-        for mass_at_y, x_prime in holders_with_mass:
-            if mass_to_free < TOL:
-                # Tolerance check: stop if we need less than TOL
-                break
-            
-            # How much can we take from x_prime at sink y?
-            can_displace = min(mass_to_free, mass_at_y)
-            
-            # ===== STRICT MASS CONSERVATION =====
-            # REMOVE from sink y
-            self.mu[x_prime, y] -= can_displace
-            
-            # RETURN to x_prime as unassigned mass
-            # (This is crucial: the displaced mass goes back to x_prime to be re-bid)
-            # We track this implicitly: unassigned_X[x_prime] will be recomputed
-            # in solve() as mu_X[x_prime] - sum(mu[x_prime, :])
-            
-            mass_freed += can_displace
-            mass_to_free -= can_displace
-            
-            # Verify conservation within this step
-            # (unassigned mass will be verified in solve() globally)
-        
-        return mass_freed
+        # 3. Strict Displacement Loop over all other owners
+        for x_prime in range(self.mu.shape):
+            if x_prime == x:
+                continue # Mathematical rule: A node must NEVER displace itself
+                
+            if self.mu[x_prime, y] > TOL:
+                # Take only what we need, capped by what x_prime actually owns
+                displaced = min(self.mu[x_prime, y], amount_to_displace)
+                
+                # 4. STRICT BANK TRANSACTION (Conservation of Mass)
+                self.mu[x_prime, y] -= displaced
+                self.unassigned_X[x_prime] += displaced # MUST be added back exactly!
+                
+                amount_to_displace -= displaced
+                actual_displaced += displaced
+                
+                # 5. Halt if we have successfully displaced all the mass we needed
+                if amount_to_displace <= TOL:
+                    break
+                    
+        return actual_displaced
 
-    def _assign_mass_to_target(self, x, y, mass_to_assign):
-        # Apply tolerance: don't assign if amount is negligible
-        if mass_to_assign < TOL:
+    
+    def _assign_mass_to_target(self, x, y, amount):
+        TOL = 1e-7 # Strict tolerance to prevent float micro-bidding deadlocks
+        
+        if amount < TOL:
             return 0.0
-        
-        # Step 1: Check available capacity (no displacement needed)
-        available = self._calculate_available_capacity(y)
-        
-        if available >= mass_to_assign - TOL:
-            # Case 1: Enough space; just add the mass
-            self.mu[x, y] += mass_to_assign
-            return mass_to_assign
-        
-        # Step 2: y is at or near capacity; need to displace
-        # First, add what we can without displacement
-        total_assigned = 0.0
-        if available > TOL:
-            self.mu[x, y] += available
-            total_assigned += available
-            mass_remaining = mass_to_assign - available
-        else:
-            mass_remaining = mass_to_assign
-        
-        # Step 3: Displace other sources to make room for the remaining mass
-        if mass_remaining > TOL:
-            mass_freed = self._displace_mass_from_others(y, x, mass_remaining)
             
-            # Step 4: Assign as much of the freed space as we need
-            can_assign_after_displacement = min(mass_remaining, mass_freed)
-            if can_assign_after_displacement > TOL:
-                self.mu[x, y] += can_assign_after_displacement
-                total_assigned += can_assign_after_displacement
+        # 1. Calculate free space strictly respecting the capacity limit mu_Y
+        current_mass_at_y = np.sum(self.mu[:, y])
+        space_remaining = max(0.0, self.mu_Y[y] - current_mass_at_y)
         
-        return total_assigned
+        # 2. Determine how much we can just place in empty space vs. what needs displacement
+        if amount <= space_remaining:
+            # Simplest case: y has enough empty space to hold all of x's bid
+            self.mu[x, y] += amount
+            self.unassigned_X[x] -= amount
+            return amount
+        else:
+            # y is full (or will be). We fill the empty space, then displace the rest
+            amount_to_displace = amount - space_remaining
+            
+            # Call the strict displacement loop
+            actual_displaced = self._displace_mass_from_others(x, y, amount_to_displace, TOL)
+            
+            # Calculate the total amount x actually secured
+            actual_assigned = space_remaining + actual_displaced
+            
+            # Finalize x's assignment strictly
+            self.mu[x, y] += actual_assigned
+            self.unassigned_X[x] -= actual_assigned
+            return actual_assigned
 
+    
     def solve(self):
         iterations = 0
         max_iterations = 100000
