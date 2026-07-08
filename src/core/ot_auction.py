@@ -2,63 +2,158 @@ import numpy as np
 import sys
 from src.utils.data_structures import SparseNeighborhood
 
+
 class AuctionOT:
     def __init__(self, cost_matrix, mu_X, mu_Y, epsilon=None, allowed_edges=None, initial_beta=None):
+
         self.C_raw = np.array(cost_matrix, dtype=float)
         self.max_c = np.max(self.C_raw)
+        # Normalize costs to [0, 1] range for numerical stability
         self.C = self.C_raw / (self.max_c if self.max_c > 0 else 1.0)
+        
         self.mu_X = np.array(mu_X, dtype=float)
         self.mu_Y = np.array(mu_Y, dtype=float)
         self.N_X, self.N_Y = self.C.shape
-        self.epsilon = epsilon if epsilon is not None else 1e-3
+        
+        # ε must remain constant during solve()
+        if epsilon is None:
+            epsilon = 1e-3
+        self.epsilon = epsilon
+        
+        # Coupling matrix: mu[i,j] = amount transported from source i to sink j
         self.mu = np.zeros((self.N_X, self.N_Y), dtype=float)
-        self.beta = np.array(initial_beta, dtype=float) if initial_beta is not None else np.zeros(self.N_Y, dtype=float)
-        self.sparse = SparseNeighborhood(self.N_X, self.N_Y, allowed_edges) if allowed_edges else None
+        
+        if initial_beta is not None:
+            self.beta = np.array(initial_beta, dtype=float)
+        else:
+            self.beta = np.zeros(self.N_Y, dtype=float)
+        
+        # Sparse neighborhood structure (for hierarchical methods)
+        if allowed_edges is not None:
+            self.sparse = SparseNeighborhood(self.N_X, self.N_Y, allowed_edges)
+        else:
+            self.sparse = None
 
     def solve(self):
         iterations = 0
-        last_unassigned = float('inf')
+        max_iterations = 100000
         
-        while iterations < 20000:
-            unassigned_X = self.mu_X - np.sum(self.mu, axis=1)
-            current_unassigned = np.sum(unassigned_X[unassigned_X > 1e-6])
+        while iterations < max_iterations:
+            # Compute unassigned mass for each source
+            assigned_X = np.sum(self.mu, axis=1)
+            unassigned_X = self.mu_X - assigned_X
             
-            if current_unassigned < 1e-6:
+            # Check convergence: all mass assigned (up to numerical tolerance)
+            total_unassigned = np.sum(unassigned_X)
+            if total_unassigned < 1e-9:
+                print(f"  Auction converged after {iterations} iterations")
                 break
             
-            # STALL DETECTION: If progress stops, relax the epsilon
-            if abs(current_unassigned - last_unassigned) < 1e-8:
-                self.epsilon *= 1.1 # Nudge the price harder to force movement
-            last_unassigned = current_unassigned
-            
+            # === BIDDING PHASE ===
+            # Pick an unassigned source with the most mass to bid
             x = np.argmax(unassigned_X)
+            mass_to_assign = unassigned_X[x]
             
-            # Calculate utility for all Y
-            vals = self.C[x, :] - self.beta
+            if mass_to_assign < 1e-9:
+                iterations += 1
+                continue
             
-            # Find best and second best
-            best_y = np.argmin(vals)
-            best_val = vals[best_y]
-            vals[best_y] = np.inf
-            second_val = np.min(vals)
+            # Get all admissible targets for this source
+            if self.sparse is not None:
+                valid_y_indices = self.sparse.get_allowed_y(x)
+            else:
+                valid_y_indices = list(range(self.N_Y))
             
-            # Core SS13 Dual Update (Displacement via Price)
-            price_inc = max(self.epsilon, (second_val - best_val) + 1e-12)
-            self.beta[best_y] -= price_inc 
+            if len(valid_y_indices) == 0:
+                print(f"  WARNING: Source {x} has no admissible targets!")
+                break
             
-            # Displacement Phase: Force mass movement
-            # We must displace mass from ALL X' currently holding Y
-            for x_prime in range(self.N_X):
-                if self.mu[x_prime, best_y] > 1e-9:
-                    # How much can we displace?
-                    can_take = min(unassigned_X[x], self.mu[x_prime, best_y])
-                    self.mu[x_prime, best_y] -= can_take
-                    self.mu[x, best_y] += can_take
-                    unassigned_X[x] -= can_take
-                    if unassigned_X[x] <= 1e-9: break
+            # Compute reduced costs: C[x, y] - beta[y]
+            # We want MINIMUM reduced cost (best value)
+            best_y = None
+            second_y = None
+            best_val = np.inf
+            second_val = np.inf
+            
+            for y in valid_y_indices:
+                reduced_cost = self.C[x, y] - self.beta[y]
+                
+                if reduced_cost < best_val:
+                    # Shift best → second best, then update best
+                    second_val = best_val
+                    second_y = best_y
+                    best_val = reduced_cost
+                    best_y = y
+                elif reduced_cost < second_val:
+                    # Update second best only
+                    second_val = reduced_cost
+                    second_y = y
+            
+            # Safety check: if we couldn't find second best, set it to best
+            # (happens when there's only one admissible target)
+            if second_y is None:
+                second_val = best_val
+            
+            price_increment = max(self.epsilon, (second_val - best_val) + 1e-12)
+            self.beta[best_y] -= price_increment
+            
+            # Calculate available space at best_y
+            current_supply_at_y = np.sum(self.mu[:, best_y])
+            available_space_at_y = self.mu_Y[best_y] - current_supply_at_y
+            
+            # Determine how much mass we can actually assign to best_y
+            mass_to_assign_to_y = min(mass_to_assign, available_space_at_y)
+            
+            if mass_to_assign_to_y < 1e-9:
+                
+                # Collect all sources holding best_y
+                holders = []
+                for x_prime in range(self.N_X):
+                    if self.mu[x_prime, best_y] > 1e-9:
+                        holders.append(x_prime)
+                
+                # Displace greedily: take from whoever has the most mass there
+                for x_prime in holders:
+                    mass_at_y = self.mu[x_prime, best_y]
+                    can_displace = min(mass_to_assign, mass_at_y)
+                    
+                    self.mu[x_prime, best_y] -= can_displace
+                    self.mu[x, best_y] += can_displace
+                    mass_to_assign -= can_displace
+                    
+                    if mass_to_assign < 1e-9:
+                        break
+            else:
+                # There is available space; assign what we can
+                self.mu[x, best_y] += mass_to_assign_to_y
+                mass_to_assign -= mass_to_assign_to_y
+                
+                # If x still has unassigned mass, we need to displace to make room
+                if mass_to_assign > 1e-9:
+                    holders = []
+                    for x_prime in range(self.N_X):
+                        if self.mu[x_prime, best_y] > 1e-9:
+                            holders.append(x_prime)
+                    
+                    for x_prime in holders:
+                        mass_at_y = self.mu[x_prime, best_y]
+                        can_displace = min(mass_to_assign, mass_at_y)
+                        
+                        self.mu[x_prime, best_y] -= can_displace
+                        self.mu[x, best_y] += can_displace
+                        mass_to_assign -= can_displace
+                        
+                        if mass_to_assign < 1e-9:
+                            break
             
             iterations += 1
-            if iterations % 5000 == 0:
-                print(f"  Auction progress: {current_unassigned:.4f} mass left", file=sys.stderr)
-
-        return self.mu, np.sum(self.mu * self.C_raw), iterations
+            if iterations % 10000 == 0:
+                print(f"  Iteration {iterations}: unassigned mass = {total_unassigned:.6f}", file=sys.stderr)
+        
+        if iterations >= max_iterations:
+            print(f"  WARNING: Reached max iterations ({max_iterations})")
+        
+        # Compute final cost in original units
+        total_cost = np.sum(self.mu * self.C_raw)
+        
+        return self.mu, total_cost, iterations
