@@ -68,7 +68,7 @@ class EpsScalingManager:
 
     def _extract_beta(self, solver):
         if hasattr(solver, 'y_atoms'):
-            return np.array([max(atom['beta'] for atom in atoms) if atoms else 0.0 for atoms in solver.y_atoms])
+            return np.array([min(atom['beta'] for atom in atoms) if atoms else 0.0 for atoms in solver.y_atoms])
         else:
             return np.copy(solver.beta)
 
