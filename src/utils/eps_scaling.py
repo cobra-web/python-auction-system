@@ -1,12 +1,13 @@
 import numpy as np
 
 class EpsScalingManager:
-    def __init__(self, solver_class, cost_matrix, theta=5.0, target_eps=None, **solver_kwargs):
+    def __init__(self, solver_class, cost_matrix, theta=5.0, target_eps=None, initial_beta=None, **solver_kwargs):
         self.solver_class = solver_class
         self.C = np.array(cost_matrix)
         self.theta = theta
         self.solver_kwargs = solver_kwargs
         self.N = self.C.shape[0]
+        self.initial_beta = initial_beta
         
         if target_eps is None:
             unique_costs = np.unique(self.C)
@@ -24,7 +25,7 @@ class EpsScalingManager:
 
     def solve(self):
         current_eps = self.start_eps
-        best_beta = None
+        best_beta = self.initial_beta
         final_assignment = None
         total_iterations = 0
         
