@@ -1,5 +1,5 @@
 import numpy as np
-from src.core.ot_auction import AuctionOT
+from src.core.ot_auction import AuctionOT, TOL
 from src.utils.eps_scaling import EpsScalingManager
 from src.hierarchical.consistency import ConsistencyChecker
 
@@ -179,14 +179,39 @@ class HierarchicalMultiscaleSolver:
 
         print("\nMultiscale optimization complete. Reconstructing solution at finest scale...")
 
-        # Reconstruct solution in original (finest-scale) coordinates
-        orig_idx_X = [cell.point_indices[0] for cell in self.tree_X.generations[0]]
-        orig_idx_Y = [cell.point_indices[0] for cell in self.tree_Y.generations[0]]
+        # Reconstruct solution in original (finest-scale) coordinates.
+        # NOTE: generation-0 cells may still contain multiple original points
+        # (tree need not refine down to singletons). Using only
+        # cell.point_indices[0] silently drops all mass belonging to the
+        # other points in the cell -> exactly the supply/demand deficits
+        # observed. Instead, split each cell-to-cell flow proportionally
+        # across the points it contains, weighted by each point's own share
+        # of mu_X / mu_Y. This is exactly mass-conserving: summing the split
+        # mass for any single point reproduces its original mu_X[x] / mu_Y[y].
+        cells_X_fine = self.tree_X.generations[0]
+        cells_Y_fine = self.tree_Y.generations[0]
 
         reconstructed_mu = np.zeros_like(self.C)
-        for i, orig_x in enumerate(orig_idx_X):
-            for j, orig_y in enumerate(orig_idx_Y):
-                reconstructed_mu[orig_x, orig_y] = current_mu[i, j]
+
+        for i, cell_a in enumerate(cells_X_fine):
+            idx_a = cell_a.point_indices
+            total_a = np.sum(self.mu_X[idx_a])
+            if total_a < TOL:
+                continue
+            weights_a = self.mu_X[idx_a] / total_a
+
+            for j, cell_b in enumerate(cells_Y_fine):
+                cell_mass = current_mu[i, j]
+                if cell_mass < TOL:
+                    continue
+
+                idx_b = cell_b.point_indices
+                total_b = np.sum(self.mu_Y[idx_b])
+                if total_b < TOL:
+                    continue
+                weights_b = self.mu_Y[idx_b] / total_b
+
+                reconstructed_mu[np.ix_(idx_a, idx_b)] += cell_mass * np.outer(weights_a, weights_b)
 
         # CRITICAL: Return coupling in original coordinates
         # Cost will be computed by benchmark using original C
