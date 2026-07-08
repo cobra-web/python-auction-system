@@ -1,5 +1,6 @@
 import numpy as np
 
+
 class EpsScalingManager:
     
     def __init__(self, solver_class, cost_matrix, theta=5.0, target_eps=None, initial_beta=None, **solver_kwargs):
@@ -14,7 +15,7 @@ class EpsScalingManager:
         
         self.theta = theta
         self.solver_kwargs = solver_kwargs
-        self.N = self.C_original.shape[0]
+        self.N_X, self.N_Y = self.C_original.shape
         self.initial_beta = initial_beta
         
         # Compute target epsilon from cost distribution
@@ -25,7 +26,7 @@ class EpsScalingManager:
             else:
                 delta_c = 1.0
             
-            self.target_eps = delta_c / float(self.N)
+            self.target_eps = delta_c / float(self.N_X)
         else:
             self.target_eps = target_eps
         
@@ -46,11 +47,24 @@ class EpsScalingManager:
             print(f"  -> Solving for ε = {current_eps:.6f}")
             
             # Create solver with normalized cost matrix
-            solver = self.solver_class(
-                self.C_normalized, 
-                epsilon=current_eps, 
-                **self.solver_kwargs
-            )
+            # CRITICAL: Pass solver_kwargs which contain mu_X, mu_Y, allowed_edges, etc.
+            try:
+                solver = self.solver_class(
+                    self.C_normalized, 
+                    epsilon=current_eps, 
+                    **self.solver_kwargs
+                )
+            except TypeError as e:
+                print(f"ERROR creating solver: {e}")
+                print(f"  solver_class: {self.solver_class}")
+                print(f"  C_normalized shape: {self.C_normalized.shape}")
+                print(f"  solver_kwargs keys: {self.solver_kwargs.keys()}")
+                for key, val in self.solver_kwargs.items():
+                    if isinstance(val, np.ndarray):
+                        print(f"    {key}: array of shape {val.shape}, dtype {val.dtype}")
+                    else:
+                        print(f"    {key}: {type(val).__name__} = {val}")
+                raise
             
             # Warm-start with previous beta (if available)
             if best_beta is not None:
@@ -59,7 +73,7 @@ class EpsScalingManager:
             # Run auction with fixed epsilon
             result = solver.solve()
             
-            # Unpack result
+            # Unpack result (always returns 3-tuple: (mu, cost, iterations))
             if len(result) == 3:
                 final_assignment, _, iters = result
             else:
@@ -88,13 +102,22 @@ class EpsScalingManager:
         solver.beta = np.copy(old_beta)
 
     def _extract_beta(self, solver):
-        """Extract dual variables from solver for next phase"""
         return np.copy(solver.beta)
 
     def _calculate_final_cost(self, assignment):
+        if assignment is None:
+            raise ValueError("Assignment is None; solver failed to produce output")
+        
+        # Handle both 1D (permutation) and 2D (coupling) assignments
         if assignment.ndim == 1:
-            # 1D assignment (permutation)
-            return sum(self.C_original[x, assignment[x]] for x in range(self.N))
+            # 1D assignment (permutation): assignment[x] = y for each x
+            cost = sum(self.C_original[x, int(assignment[x])] for x in range(self.N_X))
+        elif assignment.ndim == 2:
+            # 2D assignment (coupling matrix)
+            if assignment.shape != self.C_original.shape:
+                raise ValueError(f"Assignment shape {assignment.shape} doesn't match cost shape {self.C_original.shape}")
+            cost = np.sum(assignment * self.C_original)
         else:
-            # 2D coupling matrix
-            return np.sum(assignment * self.C_original)
+            raise ValueError(f"Assignment has unexpected shape: {assignment.shape}")
+        
+        return float(cost)
