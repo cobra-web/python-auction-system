@@ -108,7 +108,8 @@ class HierarchicalMultiscaleSolver:
                 hybrid_manager = EpsScalingManager(
                     AuctionOT, C_fine, mu_X=mu_X_fine, mu_Y=mu_Y_fine, 
                     allowed_edges=N_guess,
-                    initial_beta=current_beta_for_level 
+                    initial_beta=current_beta_for_level,
+                    target_eps=target_eps
                 )
                 current_mu, total_cost, total_iters, final_beta = hybrid_manager.solve()
 
