@@ -173,9 +173,7 @@ class AuctionOT:
                 print(f"  ERROR: Could not find best target for source {x}", file=sys.stderr)
                 break
             
-            # ===== UPDATE PRICE OF BEST TARGET (ε-COMPLEMENTARY SLACKNESS) =====
-            # CRITICAL: Price increment must be at least epsilon
-            # If (second_val - best_val) is negative due to float error, use epsilon
+            # ===== UPDATE PRICE OF BEST TARGET =====
             price_gap = second_val - best_val
             price_increment = max(self.epsilon, price_gap + 1e-12)
             
@@ -183,71 +181,10 @@ class AuctionOT:
             self.beta[best_y] -= price_increment
             
             # ===== ASSIGN MASS TO BEST TARGET =====
-            mass_assigned_to_best = self._assign_mass_to_target(x, best_y, mass_to_assign)
-            remaining_mass = mass_to_assign - mass_assigned_to_best
-            
-            # ===== HANDLE RESIDUAL MASS: TRY SECOND-BEST =====
-            if remaining_mass > TOL and second_y is not None:
-                # Find third-best target (for price update of second_y)
-                third_val = np.inf
-                for y in valid_y_indices:
-                    if y != best_y and y != second_y:
-                        rc = self.C[x, y] - self.beta[y]
-                        if rc < third_val:
-                            third_val = rc
-                
-                # If no third target exists, use second_val as fallback
-                if third_val == np.inf:
-                    third_val = second_val
-                
-                # Update price of second target
-                second_val_current = self.C[x, second_y] - self.beta[second_y]
-                price_gap_second = third_val - second_val_current
-                price_increment_second = max(self.epsilon, price_gap_second + 1e-12)
-                self.beta[second_y] -= price_increment_second
-                
-                # Try to assign residual to second target
-                mass_assigned_to_second = self._assign_mass_to_target(x, second_y, remaining_mass)
-                remaining_mass -= mass_assigned_to_second
-            
-            # ===== MULTI-TARGET RESIDUAL HANDLING =====
-            if remaining_mass > TOL:
-                tried_targets = {best_y}
-                if second_y is not None:
-                    tried_targets.add(second_y)
-                
-                remaining_targets = [y for y in valid_y_indices if y not in tried_targets]
-                if len(remaining_targets) > 0:
-                    # Sort by reduced cost
-                    remaining_targets_sorted = sorted(
-                        remaining_targets, 
-                        key=lambda y: self.C[x, y] - self.beta[y]
-                    )
-                    
-                    # Try each remaining target
-                    for y_next in remaining_targets_sorted:
-                        if remaining_mass < TOL:
-                            break
-                        
-                        # Update price for this target
-                        rc_current = self.C[x, y_next] - self.beta[y_next]
-                        # Find next-best after y_next
-                        next_best = np.inf
-                        for y_other in remaining_targets_sorted:
-                            if y_other != y_next:
-                                rc_other = self.C[x, y_other] - self.beta[y_other]
-                                if rc_other < next_best:
-                                    next_best = rc_other
-                        
-                        if next_best == np.inf:
-                            next_best = rc_current
-                        
-                        price_inc = max(self.epsilon, (next_best - rc_current) + 1e-12)
-                        self.beta[y_next] -= price_inc
-                        
-                        # Assign residual
-                        mass_assigned = self._assign_mass_to_target(x, y_next, remaining_mass)
-                        remaining_mass -= mass_assigned
+            # We assign whatever we can. If we don't assign it all because the target
+            # is saturated with our own mass, THAT IS FINE! The iteration ends, and x 
+            # will simply re-evaluate the new prices on the next loop pass.
+            self._assign_mass_to_target(x, best_y, mass_to_assign)
             
             iterations += 1
             if iterations % 10000 == 0:
