@@ -128,33 +128,29 @@ class HierarchicalMultiscaleSolver:
                 )
                 current_mu, total_cost, total_iters, final_beta = hybrid_manager.solve()
                 
-                # Keep normalized beta for next iterations in the Auction solver
                 current_beta_for_level = final_beta.copy()
                 
                 # UNSCALE DUALS
                 scale = hybrid_manager.scale
                 unscaled_beta = final_beta * scale
-                unscaled_target_eps = hybrid_manager.target_eps * scale
 
                 checker.c_hat_cache.clear()
 
-                # --- CRITICAL FIX: Extract alpha ONLY from active edges ---
+                # --- CRITICAL FIX: EXACT SCHMITZER ALPHA ---
+                # We must evaluate alpha as the absolute minimum reduced cost available in the sparse neighborhood.
                 alpha = np.full(len(mu_X_fine), np.inf, dtype=float)
                 for x in range(len(mu_X_fine)):
-                    # Get targets where x ACTUALLY successfully placed mass
-                    active_ys = np.where(current_mu[x] > TOL)[0]
-                    
-                    if len(active_ys) > 0:
-                        alpha[x] = np.max(C_fine[x, active_ys] - unscaled_beta[active_ys])
-                    else:
-                        # Fallback (safety net)
-                        valid_ys = [y for (x_prime, y) in N_guess if x_prime == x]
-                        if len(valid_ys) > 0:
-                            alpha[x] = np.min(C_fine[x, valid_ys] - unscaled_beta[valid_ys])
+                    valid_ys = [y for (x_prime, y) in N_guess if x_prime == x]
+                    if len(valid_ys) > 0:
+                        alpha[x] = np.min(C_fine[x, valid_ys] - unscaled_beta[valid_ys])
 
-                alpha_prime = alpha + unscaled_target_eps + 1e-9
+                # Use the actual stopping epsilon of the solver (1e-4) to bound the slackness violation.
+                actual_eps = max(hybrid_manager.target_eps, 1e-4)
+                
+                # Inflate alpha by the true scaled epsilon plus a microscopic buffer for float safety.
+                alpha_prime = alpha + (actual_eps * scale) + 1e-5
 
-                # Run consistency check using UNSCALED beta
+                # Run consistency check 
                 prev_len = len(checker.N_set)
                 checker.run_consistency_check(alpha_prime, unscaled_beta, target_gen=gen)
                 added = len(checker.N_set) - prev_len
