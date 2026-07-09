@@ -100,11 +100,11 @@ class HierarchicalMultiscaleSolver:
         C_hat, mu_X_hat, mu_Y_hat = self._build_coarsened_problem(coarsest_gen)
 
         manager = EpsScalingManager(AuctionOT, C_hat, mu_X=mu_X_hat, mu_Y=mu_Y_hat)
-        current_mu, _, _, final_beta = manager.solve()
+        current_mu, _, _, final_prices = manager.solve()
         
-        # LIFT: Scale beta up to the original unnormalized metric
+        # Lift absolute auction prices
         max_c_coarsest = np.max(np.abs(C_hat)) if np.max(np.abs(C_hat)) > 0 else 1.0
-        current_beta = final_beta * max_c_coarsest
+        current_prices = final_prices * max_c_coarsest
 
         # ===== REFINEMENT LOOP =====
         for gen in range(coarsest_gen - 1, -1, -1):
@@ -113,22 +113,21 @@ class HierarchicalMultiscaleSolver:
             N_guess = self._induce_sparse_neighborhood(current_mu, gen + 1)
             C_fine, mu_X_fine, mu_Y_fine = self._build_coarsened_problem(gen)
             
-            # Identify normalization factor for the current fine level
             max_c_fine = np.max(np.abs(C_fine)) if np.max(np.abs(C_fine)) > 0 else 1.0
 
             cells_Y_fine = self.tree_Y.generations[gen]
             cells_Y_coarse = self.tree_Y.generations[gen + 1]
             cell_to_idx_Y_coarse = {cell: idx for idx, cell in enumerate(cells_Y_coarse)}
 
-            current_beta_for_level_unscaled = np.zeros(len(cells_Y_fine), dtype=float)
+            current_prices_for_level_unscaled = np.zeros(len(cells_Y_fine), dtype=float)
             for i, fine_cell in enumerate(cells_Y_fine):
                 parent_cell = fine_cell.parent
                 if parent_cell in cell_to_idx_Y_coarse:
                     parent_idx = cell_to_idx_Y_coarse[parent_cell]
-                    current_beta_for_level_unscaled[i] = current_beta[parent_idx]
+                    current_prices_for_level_unscaled[i] = current_prices[parent_idx]
 
-            # DROP: Scale beta down for the normalized EpsScalingManager
-            current_beta_for_level = current_beta_for_level_unscaled / max_c_fine
+            # Scale prices down for the normalized EpsScalingManager
+            current_beta_for_level = current_prices_for_level_unscaled / max_c_fine
 
             checker.N_set = set(N_guess)
             checker.c_hat_cache.clear()
@@ -144,26 +143,31 @@ class HierarchicalMultiscaleSolver:
                     initial_beta=current_beta_for_level,
                     target_eps=None
                 )
-                current_mu, total_cost, total_iters, final_beta = hybrid_manager.solve()
-                current_beta_for_level = final_beta.copy()
+                current_mu, total_cost, total_iters, final_prices = hybrid_manager.solve()
+                current_beta_for_level = final_prices.copy()
 
-                # LIFT: Reconstruct unnormalized duals for the consistency check
-                final_beta_unnormalized = final_beta * max_c_fine
+                final_prices_unnormalized = final_prices * max_c_fine
                 target_eps_unnormalized = hybrid_manager.target_eps * max_c_fine
 
+                # CRITICAL FIX: Convert Auction Prices (p) to OT Dual Variables (beta)
+                # Mathematical OT dual: beta = -prices
+                beta_dual = -final_prices_unnormalized
+
+                # Extract dual certificates using correct OT duals
                 alpha = np.full(len(mu_X_fine), np.inf, dtype=float)
                 for x in range(len(mu_X_fine)):
                     valid_ys = [y for (x_prime, y) in N_guess if x_prime == x]
                     if len(valid_ys) > 0:
-                        alpha[x] = np.min(C_fine[x, valid_ys] - final_beta_unnormalized[valid_ys])
+                        # alpha = min(C - beta) = min(C + prices)
+                        alpha[x] = np.min(C_fine[x, valid_ys] - beta_dual[valid_ys])
 
                 alpha_prime = alpha + target_eps_unnormalized
 
                 # ===== CONSISTENCY CHECK =====
                 prev_len = len(checker.N_set)
                 
-                # Pass unnormalized beta to match C_hat and alpha_prime
-                checker.run_consistency_check(alpha_prime, final_beta_unnormalized, target_gen=gen)
+                # Pass the OT dual variable (beta_dual), NOT the positive prices
+                checker.run_consistency_check(alpha_prime, beta_dual, target_gen=gen)
                 added = len(checker.N_set) - prev_len
                 N_guess = list(checker.N_set)
 
@@ -181,8 +185,8 @@ class HierarchicalMultiscaleSolver:
 
             self.last_N_guess = N_guess
             
-            # STORE: Keep unnormalized beta for the next outer generation loop
-            current_beta = final_beta * max_c_fine
+            # STORE: Keep unnormalized prices for the next outer generation loop
+            current_prices = final_prices * max_c_fine
 
         print("\nMultiscale optimization complete. Reconstructing solution at finest scale...")
 
