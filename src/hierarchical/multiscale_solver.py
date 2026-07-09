@@ -5,6 +5,16 @@ from src.hierarchical.consistency import ConsistencyChecker
 
 
 class HierarchicalMultiscaleSolver:
+
+    @staticmethod
+    def bounding_box_upper_bound(boxA_min, boxA_max, boxB_min, boxB_max):
+        delta = np.maximum(np.abs(boxA_min - boxB_max), np.abs(boxB_min - boxA_max))
+        return np.sum(delta ** 2)
+
+    @staticmethod
+    def bounding_box_lower_bound(boxA_min, boxA_max, boxB_min, boxB_max):
+        delta = np.maximum(0, np.maximum(boxA_min - boxB_max, boxB_min - boxA_max))
+        return np.sum(delta ** 2)
     
     def __init__(self, tree_X, tree_Y, cost_matrix, mu_X, mu_Y):
         self.tree_X = tree_X
@@ -99,13 +109,9 @@ class HierarchicalMultiscaleSolver:
         # ===== COARSEST LEVEL: Solve OT on coarsest partitions =====
         C_hat, mu_X_hat, mu_Y_hat = self._build_coarsened_problem(coarsest_gen)
 
-        # Track the normalization factor (max_c) each EpsScalingManager divides
-        # by internally, so beta warm-starts can be rescaled when crossing to a
-        # level with a different max_c (see note below).
         prev_max_c = np.max(np.abs(C_hat))
         prev_max_c = prev_max_c if prev_max_c > 0 else 1.0
 
-        # Use ε-scaling manager on coarsest level
         manager = EpsScalingManager(AuctionOT, C_hat, mu_X=mu_X_hat, mu_Y=mu_Y_hat)
         current_mu, _, _, final_beta = manager.solve()
         current_beta = final_beta
@@ -114,36 +120,28 @@ class HierarchicalMultiscaleSolver:
         for gen in range(coarsest_gen - 1, -1, -1):
             print(f"\n--- Refining to Generation {gen} ---")
 
-            # Lift coarse solution to candidate edges at fine level
             N_guess = self._induce_sparse_neighborhood(current_mu, gen + 1)
             C_fine, mu_X_fine, mu_Y_fine = self._build_coarsened_problem(gen)
 
-            # EpsScalingManager normalizes cost matrices independently at every
-            # level (C_original / max_c), so beta lives in level-local
-            # normalized units. Copying a parent's beta straight into the finer
-            # level ignores that max_c differs per level, silently distorting
-            # the warm-start magnitude (and, downstream, the alpha/alpha' fed
-            # into the consistency check). Rescale by the ratio of the two
-            # levels' max_c so beta stays in consistent normalized units.
             fine_max_c = np.max(np.abs(C_fine))
             fine_max_c = fine_max_c if fine_max_c > 0 else 1.0
             beta_scale = prev_max_c / fine_max_c
 
-            # Initialize β for fine level using parent's β values
             cells_Y_fine = self.tree_Y.generations[gen]
             cells_Y_coarse = self.tree_Y.generations[gen + 1]
             cell_to_idx_Y_coarse = {cell: idx for idx, cell in enumerate(cells_Y_coarse)}
+            
+            cells_X_fine = self.tree_X.generations[gen]
+            cells_X_coarse = self.tree_X.generations[gen + 1]
+            cell_to_idx_X_coarse = {cell: idx for idx, cell in enumerate(cells_X_coarse)}
 
             current_beta_for_level = np.zeros(len(cells_Y_fine), dtype=float)
             for i, fine_cell in enumerate(cells_Y_fine):
                 parent_cell = fine_cell.parent
                 if parent_cell in cell_to_idx_Y_coarse:
                     parent_idx = cell_to_idx_Y_coarse[parent_cell]
-                    # Initialize with parent's dual value, rescaled to this
-                    # level's normalization (conservative warm start).
                     current_beta_for_level[i] = current_beta[parent_idx] * beta_scale
 
-            # Update consistency checker for this level
             checker.N_set = set(N_guess)
             checker.c_hat_cache.clear()
 
@@ -152,7 +150,6 @@ class HierarchicalMultiscaleSolver:
             while consistency_iterations < 100:
                 consistency_iterations += 1
 
-                # Solve OT at this level with warm-start
                 hybrid_manager = EpsScalingManager(
                     AuctionOT, C_fine, mu_X=mu_X_fine, mu_Y=mu_Y_fine,
                     allowed_edges=N_guess,
@@ -161,6 +158,7 @@ class HierarchicalMultiscaleSolver:
                 )
                 current_mu, total_cost, total_iters, final_beta = hybrid_manager.solve()
                 current_beta_for_level = final_beta.copy()
+                target_eps = hybrid_manager.target_eps
 
                 # Extract dual certificates from solution
                 alpha = np.full(len(mu_X_fine), np.inf, dtype=float)
@@ -169,9 +167,27 @@ class HierarchicalMultiscaleSolver:
                     if len(valid_ys) > 0:
                         alpha[x] = np.min(C_fine[x, valid_ys] - final_beta[valid_ys])
 
-                # Add ε-slack for consistency check
-                target_eps = hybrid_manager.target_eps
-                alpha_prime = alpha + target_eps
+                # ===== NEW: CALCULATE SCHMITZER'S GEOMETRIC SLACK =====
+                alpha_prime = np.zeros_like(alpha)
+                for x in range(len(mu_X_fine)):
+                    parent_cell_X = cells_X_fine[x].parent
+                    max_cell_slack = 0.0
+                    
+                    # Safely check if the parent cell exists and has a bounding box stored
+                    if parent_cell_X is not None and getattr(parent_cell_X, 'bbox', None) is not None:
+                        for y_coarse_idx, cell_Y_coarse in enumerate(cells_Y_coarse):
+                            # Only calculate geometric error over edges active in the coarse solution
+                            if current_mu[cell_to_idx_X_coarse[parent_cell_X], y_coarse_idx] > 1e-9:
+                                if getattr(cell_Y_coarse, 'bbox', None) is not None:
+                                    boxA_min, boxA_max = parent_cell_X.bbox
+                                    boxB_min, boxB_max = cell_Y_coarse.bbox
+                                    
+                                    c_min = self.bounding_box_lower_bound(boxA_min, boxA_max, boxB_min, boxB_max)
+                                    c_max = self.bounding_box_upper_bound(boxA_min, boxA_max, boxB_min, boxB_max)
+                                    max_cell_slack = max(max_cell_slack, c_max - c_min)
+                    
+                    # Inflate alpha_prime by the target_eps AND the geometric variance bounds
+                    alpha_prime[x] = alpha[x] + target_eps + 1e-9 + max_cell_slack
 
                 # ===== CONSISTENCY CHECK: Expand N_guess if needed =====
                 prev_len = len(checker.N_set)
@@ -187,7 +203,6 @@ class HierarchicalMultiscaleSolver:
                     print(f"  [Consistency Iter {consistency_iterations}] Found {added} new edges "
                           f"(N_guess: {prev_len} -> {len(N_guess)})")
 
-                # Safety: stop if neighborhood grows too dense
                 if len(N_guess) > len(mu_X_fine) * len(mu_Y_fine) * 0.5:
                     print(f"  WARNING: Neighborhood at {100.0*len(N_guess)/(len(mu_X_fine)*len(mu_Y_fine)):.1f}% density; stopping expansion")
                     break
@@ -198,18 +213,8 @@ class HierarchicalMultiscaleSolver:
 
         print("\nMultiscale optimization complete. Reconstructing solution at finest scale...")
 
-        # Reconstruct solution in original (finest-scale) coordinates.
-        # NOTE: generation-0 cells may still contain multiple original points
-        # (tree need not refine down to singletons). Using only
-        # cell.point_indices[0] silently drops all mass belonging to the
-        # other points in the cell -> exactly the supply/demand deficits
-        # observed. Instead, split each cell-to-cell flow proportionally
-        # across the points it contains, weighted by each point's own share
-        # of mu_X / mu_Y. This is exactly mass-conserving: summing the split
-        # mass for any single point reproduces its original mu_X[x] / mu_Y[y].
         cells_X_fine = self.tree_X.generations[0]
         cells_Y_fine = self.tree_Y.generations[0]
-
         reconstructed_mu = np.zeros_like(self.C)
 
         for i, cell_a in enumerate(cells_X_fine):
@@ -232,6 +237,4 @@ class HierarchicalMultiscaleSolver:
 
                 reconstructed_mu[np.ix_(idx_a, idx_b)] += cell_mass * np.outer(weights_a, weights_b)
 
-        # CRITICAL: Return coupling in original coordinates
-        # Cost will be computed by benchmark using original C
         return reconstructed_mu
