@@ -59,26 +59,72 @@ class HierarchicalMultiscaleSolver:
         manager = EpsScalingManager(AuctionOT, C_hat, mu_X=mu_X_hat, mu_Y=mu_Y_hat)
         current_mu, _, _, current_beta = manager.solve() 
 
+        # The coarsest level is solved DENSELY (no allowed_edges), so alpha
+        # computed as a plain row-min over the full C_hat is exact -- every
+        # (x, y) pair really was considered. This is the first "trustworthy"
+        # dual pair (alpha, beta) we can hand down to certify neighborhoods
+        # at finer generations.
+        current_alpha = np.min(C_hat - current_beta[np.newaxis, :], axis=1)
+
         for gen in range(coarsest_gen - 1, -1, -1):
             print(f"\n--- Refining to Generation {gen} ---")
 
-            N_guess = self._induce_sparse_neighborhood(current_mu, gen + 1)
             C_fine, mu_X_fine, mu_Y_fine = self._build_coarsened_problem(gen)
 
+            cells_X_fine = self.tree_X.generations[gen]
             cells_Y_fine = self.tree_Y.generations[gen]
+            cells_X_coarse = self.tree_X.generations[gen + 1]
             cells_Y_coarse = self.tree_Y.generations[gen + 1]
+            cell_to_idx_X_coarse = {cell: idx for idx, cell in enumerate(cells_X_coarse)}
             cell_to_idx_Y_coarse = {cell: idx for idx, cell in enumerate(cells_Y_coarse)}
 
-            # WARM START RESTORED: Inherit dual variables from the parent generation
+            # Inherit BOTH dual variables from the parent generation.
+            # beta -> auction warm start (as before).
+            # alpha -> lets us CERTIFY a neighborhood for this generation
+            #          before any auction runs on it (see below).
             current_beta_for_level = np.zeros(len(cells_Y_fine), dtype=float)
             for i, fine_cell in enumerate(cells_Y_fine):
                 parent_cell = fine_cell.parent
                 if parent_cell in cell_to_idx_Y_coarse:
                     current_beta_for_level[i] = current_beta[cell_to_idx_Y_coarse[parent_cell]]
 
-            checker.N_set = set(N_guess)
+            current_alpha_for_level = np.zeros(len(cells_X_fine), dtype=float)
+            for i, fine_cell in enumerate(cells_X_fine):
+                parent_cell = fine_cell.parent
+                if parent_cell in cell_to_idx_X_coarse:
+                    current_alpha_for_level[i] = current_alpha[cell_to_idx_X_coarse[parent_cell]]
+
+            # ===== CERTIFY THE NEIGHBORHOOD BEFORE THE FIRST SOLVE =====
+            # _induce_sparse_neighborhood is a PRIMAL, mass-based guess. It
+            # carries no feasibility/optimality guarantee on its own -- it is
+            # only ever a candidate seed. Schmitzer's consistency theorem
+            # requires the neighborhood to be verified via the DUAL condition
+            #     c_hat(a,b) - beta_hat(b) < alpha_prime_hat(a)
+            # using duals that are already known to be correct -- here, the
+            # parent generation's (gen+1) verified alpha/beta, inherited down.
+            # Running this check BEFORE the auction, rather than after,
+            # closes the theoretical gap: the auction below is now only ever
+            # given an edge set that has already been proven sufficient.
+            N_seed = self._induce_sparse_neighborhood(current_mu, gen + 1)
+            checker.N_set = set(N_seed)
             checker.c_hat_cache.clear()
 
+            target_eps_absolute = EpsScalingManager.compute_target_eps_absolute(C_fine)
+            alpha_prime_for_level = current_alpha_for_level + target_eps_absolute
+
+            checker.run_consistency_check(alpha_prime_for_level, current_beta_for_level, target_gen=gen)
+            N_guess = list(checker.N_set)
+            print(f"  Certified {len(N_guess)} edges before first solve "
+                  f"(primal-mass seed had {len(N_seed)})")
+
+            # ===== FIXED-POINT ITERATION =====
+            # The pre-certification above uses the PARENT's duals, which are
+            # not yet optimal for this generation. After solving we obtain
+            # sharper, generation-local duals and re-check with those; this
+            # loop is Schmitzer's fixed-point iteration, now starting from a
+            # certified graph instead of an unverified heuristic one, so in
+            # practice it should converge in zero or one extra pass rather
+            # than being relied upon to rescue an infeasible first solve.
             consistency_iterations = 0
             while consistency_iterations < 100:
                 consistency_iterations += 1
@@ -115,9 +161,23 @@ class HierarchicalMultiscaleSolver:
                         )
 
                         alpha[x] = min_sparse
+                    else:
+                        # Every x has positive mass, so a certified N_guess
+                        # should never leave a row with zero edges. If this
+                        # fires, pre-certification has a real gap -- surface
+                        # it loudly instead of silently carrying inf forward,
+                        # since alpha_prime = inf disables pruning for that
+                        # row's entire ancestor chain and would mask the bug.
+                        print(f"  WARNING: x={x} has zero certified edges "
+                              f"at generation {gen}; pre-certification should "
+                              f"have prevented this.")
 
-                alpha_prime = alpha + target_eps_absolute + 1e-9
-                
+                # Schmitzer's condition is alpha' = alpha + eps, exactly --
+                # no extra additive slack. (The previous +1e-9 here was an
+                # unjustified deviation: at tight target_eps it stops being
+                # negligible and can make the check under-detect missing
+                # edges instead of only guarding against float round-off.)
+                alpha_prime = alpha + target_eps_absolute
 
                 prev_len = len(checker.N_set)
                 checker.run_consistency_check(alpha_prime, final_beta, target_gen=gen)
@@ -136,6 +196,11 @@ class HierarchicalMultiscaleSolver:
 
             self.last_N_guess = N_guess
             current_beta = final_beta
+            # 'added == 0' means N_guess is fully verified at this generation:
+            # the sparse-restricted min equals the true dense min for every x.
+            # That makes this generation's `alpha` exact, safe to hand down as
+            # the certified dual for pre-certifying the next (finer) generation.
+            current_alpha = alpha
 
         print("\nReconstructing solution...")
         cells_X_fine = self.tree_X.generations[0]
