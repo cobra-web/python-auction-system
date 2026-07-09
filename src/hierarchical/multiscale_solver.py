@@ -136,19 +136,20 @@ class HierarchicalMultiscaleSolver:
 
                 checker.c_hat_cache.clear()
 
-                # --- CRITICAL FIX: EXACT SCHMITZER ALPHA ---
-                # We must evaluate alpha as the absolute minimum reduced cost available in the sparse neighborhood.
+                # --- CRITICAL FIX: The Supremum Bound ---
+                # Find the maximum (worst) reduced cost the source accepted in the sparse graph.
+                # If a missing edge is cheaper than the WORST edge x is currently using, we must add it.
                 alpha = np.full(len(mu_X_fine), np.inf, dtype=float)
                 for x in range(len(mu_X_fine)):
                     valid_ys = [y for (x_prime, y) in N_guess if x_prime == x]
                     if len(valid_ys) > 0:
-                        alpha[x] = np.min(C_fine[x, valid_ys] - unscaled_beta[valid_ys])
+                        alpha[x] = np.max(C_fine[x, valid_ys] - unscaled_beta[valid_ys])
 
-                # Use the actual stopping epsilon of the solver (1e-4) to bound the slackness violation.
                 actual_eps = max(hybrid_manager.target_eps, 1e-4)
                 
-                # Inflate alpha by the true scaled epsilon plus a microscopic buffer for float safety.
-                alpha_prime = alpha + (actual_eps * scale) + 1e-5
+                # Add a generous numerical buffer proportional to the matrix scale to absorb 
+                # dual fluctuations from the aggressive 1/5 epsilon scaling.
+                alpha_prime = alpha + (actual_eps * scale) + (1e-3 * scale)
 
                 # Run consistency check 
                 prev_len = len(checker.N_set)
