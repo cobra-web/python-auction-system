@@ -3,18 +3,7 @@ from src.core.ot_auction import AuctionOT, TOL
 from src.utils.eps_scaling import EpsScalingManager
 from src.hierarchical.consistency import ConsistencyChecker
 
-
 class HierarchicalMultiscaleSolver:
-
-    @staticmethod
-    def bounding_box_upper_bound(boxA_min, boxA_max, boxB_min, boxB_max):
-        delta = np.maximum(np.abs(boxA_min - boxB_max), np.abs(boxB_min - boxA_max))
-        return np.sum(delta ** 2)
-
-    @staticmethod
-    def bounding_box_lower_bound(boxA_min, boxA_max, boxB_min, boxB_max):
-        delta = np.maximum(0, np.maximum(boxA_min - boxB_max, boxB_min - boxA_max))
-        return np.sum(delta ** 2)
     
     def __init__(self, tree_X, tree_Y, cost_matrix, mu_X, mu_Y):
         self.tree_X = tree_X
@@ -42,8 +31,6 @@ class HierarchicalMultiscaleSolver:
         for j, cell_b in enumerate(cells_Y):
             mu_Y_hat[j] = np.sum(self.mu_Y[cell_b.point_indices])
 
-        # Compute coarse-level costs: minimum cost within each coarse cell
-        # This ensures costs are lower bounds (tighter pruning)
         C_hat = np.zeros((num_a, num_b))
         for i, cell_a in enumerate(cells_X):
             for j, cell_b in enumerate(cells_Y):
@@ -62,35 +49,22 @@ class HierarchicalMultiscaleSolver:
         cells_X_fine = self.tree_X.generations[gen_fine]
         cells_Y_fine = self.tree_Y.generations[gen_fine]
         
-        # Create mapping from fine-level cell to index
         cell_to_idx_X = {cell: idx for idx, cell in enumerate(cells_X_fine)}
         cell_to_idx_Y = {cell: idx for idx, cell in enumerate(cells_Y_fine)}
         
         allowed_edges = []
         
-        # Iterate over all coarse-level pairs
         for i in range(len(cells_X_coarse)):
             for j in range(len(cells_Y_coarse)):
-                # Only expand pairs with nonzero mass in the coarse solution
                 if coarse_mu[i, j] > 1e-9:
                     parent_a = cells_X_coarse[i]
                     parent_b = cells_Y_coarse[j]
                     
-                    # Get children of coarse cells (or self if no children)
-                    if parent_a.children and len(parent_a.children) > 0:
-                        children_a = parent_a.children
-                    else:
-                        children_a = [parent_a]
+                    children_a = parent_a.children if parent_a.children and len(parent_a.children) > 0 else [parent_a]
+                    children_b = parent_b.children if parent_b.children and len(parent_b.children) > 0 else [parent_b]
                     
-                    if parent_b.children and len(parent_b.children) > 0:
-                        children_b = parent_b.children
-                    else:
-                        children_b = [parent_b]
-                    
-                    # Expand to all combinations of children at fine level
                     for child_a in children_a:
                         for child_b in children_b:
-                            # Check that children are actually in the fine level
                             if child_a in cell_to_idx_X and child_b in cell_to_idx_Y:
                                 fine_x = cell_to_idx_X[child_a]
                                 fine_y = cell_to_idx_Y[child_b]
@@ -103,10 +77,9 @@ class HierarchicalMultiscaleSolver:
         print(f"Starting Hierarchical Multiscale Solve (depth g={self.g})")
         print(f"Root generation (coarsest): {coarsest_gen}")
 
-        # Initialize consistency checker for all generations
         checker = ConsistencyChecker(self.tree_X, self.tree_Y, self.C, initial_sparse_N=[])
 
-        # ===== COARSEST LEVEL: Solve OT on coarsest partitions =====
+        # ===== COARSEST LEVEL =====
         C_hat, mu_X_hat, mu_Y_hat = self._build_coarsened_problem(coarsest_gen)
 
         prev_max_c = np.max(np.abs(C_hat))
@@ -116,7 +89,7 @@ class HierarchicalMultiscaleSolver:
         current_mu, _, _, final_beta = manager.solve()
         current_beta = final_beta
 
-        # ===== REFINEMENT LOOP: Refine downward through generations =====
+        # ===== REFINEMENT LOOP =====
         for gen in range(coarsest_gen - 1, -1, -1):
             print(f"\n--- Refining to Generation {gen} ---")
 
@@ -131,10 +104,6 @@ class HierarchicalMultiscaleSolver:
             cells_Y_coarse = self.tree_Y.generations[gen + 1]
             cell_to_idx_Y_coarse = {cell: idx for idx, cell in enumerate(cells_Y_coarse)}
             
-            cells_X_fine = self.tree_X.generations[gen]
-            cells_X_coarse = self.tree_X.generations[gen + 1]
-            cell_to_idx_X_coarse = {cell: idx for idx, cell in enumerate(cells_X_coarse)}
-
             current_beta_for_level = np.zeros(len(cells_Y_fine), dtype=float)
             for i, fine_cell in enumerate(cells_Y_fine):
                 parent_cell = fine_cell.parent
@@ -145,7 +114,7 @@ class HierarchicalMultiscaleSolver:
             checker.N_set = set(N_guess)
             checker.c_hat_cache.clear()
 
-            # ===== CONSISTENCY LOOP (Section 4.2 of SS13) =====
+            # ===== CONSISTENCY LOOP =====
             consistency_iterations = 0
             while consistency_iterations < 100:
                 consistency_iterations += 1
@@ -157,46 +126,33 @@ class HierarchicalMultiscaleSolver:
                     target_eps=None
                 )
                 current_mu, total_cost, total_iters, final_beta = hybrid_manager.solve()
+                
+                # Keep normalized beta for next iterations in the Auction solver
                 current_beta_for_level = final_beta.copy()
-                target_eps = hybrid_manager.target_eps
+                
+                # --- CRITICAL FIX: UNSCALE DUALS ---
+                # EpsScalingManager returns duals mapped to a [0, 1] normalized cost matrix.
+                # We must multiply them by the scale to match the raw C_fine used in ConsistencyChecker.
+                scale = hybrid_manager.scale
+                unscaled_beta = final_beta * scale
+                unscaled_target_eps = hybrid_manager.target_eps * scale
 
-                checker.c_hat_cache = {}
+                checker.c_hat_cache.clear()
 
-                # Extract dual certificates from solution
+                # Extract dual certificates using UNSCALED values
                 alpha = np.full(len(mu_X_fine), np.inf, dtype=float)
                 for x in range(len(mu_X_fine)):
                     valid_ys = [y for (x_prime, y) in N_guess if x_prime == x]
                     if len(valid_ys) > 0:
-                        alpha[x] = np.min(C_fine[x, valid_ys] - final_beta[valid_ys])
+                        alpha[x] = np.min(C_fine[x, valid_ys] - unscaled_beta[valid_ys])
 
-# ===== NEW: CALCULATE SCHMITZER'S GEOMETRIC SLACK =====
-                alpha_prime = np.zeros_like(alpha)
-                for x in range(len(mu_X_fine)):
-                    parent_cell_X = cells_X_fine[x].parent
-                    max_cell_slack = 0.0
-                    
-                    # Get the fine targets (y) that x is actively connected to in the sparse graph
-                    valid_ys = [y for (x_prime, y) in N_guess if x_prime == x]
-                    
-                    # Safely check if the parent cell exists and has a bounding box stored
-                    if parent_cell_X is not None and getattr(parent_cell_X, 'bbox', None) is not None:
-                        for y in valid_ys:
-                            parent_cell_Y = cells_Y_fine[y].parent
-                            if parent_cell_Y is not None and getattr(parent_cell_Y, 'bbox', None) is not None:
-                                boxA_min, boxA_max = parent_cell_X.bbox
-                                boxB_min, boxB_max = parent_cell_Y.bbox
-                                
-                                # Calculate geometric variance between these parent cells
-                                c_min = self.bounding_box_lower_bound(boxA_min, boxA_max, boxB_min, boxB_max)
-                                c_max = self.bounding_box_upper_bound(boxA_min, boxA_max, boxB_min, boxB_max)
-                                max_cell_slack = max(max_cell_slack, c_max - c_min)
-                    
-                    # Inflate alpha_prime by target_eps AND the geometric variance bounds
-                    alpha_prime[x] = alpha[x] + target_eps + 1e-9 + max_cell_slack
+                # Because ConsistencyChecker._c_hat already computes the EXACT lower-bound cost 
+                # (np.min), we do NOT need the geometric max_cell_slack heuristic.
+                alpha_prime = alpha + unscaled_target_eps + 1e-9
 
-                # ===== CONSISTENCY CHECK: Expand N_guess if needed =====
+                # Run consistency check using UNSCALED beta
                 prev_len = len(checker.N_set)
-                checker.run_consistency_check(alpha_prime, final_beta, target_gen=gen)
+                checker.run_consistency_check(alpha_prime, unscaled_beta, target_gen=gen)
                 added = len(checker.N_set) - prev_len
                 N_guess = list(checker.N_set)
 
@@ -213,7 +169,7 @@ class HierarchicalMultiscaleSolver:
                     break
 
             self.last_N_guess = N_guess
-            current_beta = final_beta
+            current_beta = final_beta  # Pass the normalized beta forward correctly
             prev_max_c = fine_max_c
 
         print("\nMultiscale optimization complete. Reconstructing solution at finest scale...")
