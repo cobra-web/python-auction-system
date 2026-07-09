@@ -14,6 +14,8 @@ class EpsScalingManager:
         self.solver_kwargs = solver_kwargs
         self.N_X, self.N_Y = self.C_original.shape
         
+        self.initial_beta_normalized = initial_beta / self.max_c if initial_beta is not None else None
+        
         if target_eps is None:
             self.target_eps_normalized = 1e-4
         else:
@@ -21,15 +23,16 @@ class EpsScalingManager:
             
         self.target_eps_absolute = self.target_eps_normalized * self.max_c
         
-        # CRITICAL FIX: Always start epsilon scaling from a large value (C_max/2). 
-        # This allows the auction to take "giant leaps" to instantly balance the restricted sparse graph.
-        self.start_eps = max(1.0 / 2.0, self.target_eps_normalized * self.theta)
+        # WARM START FIX: Give the solver a short 2-phase adjustment window 
+        # to adapt to newly added edges without resetting all the way to 0.5.
+        if self.initial_beta_normalized is not None:
+            self.start_eps = max(self.target_eps_normalized * (self.theta ** 2), self.target_eps_normalized)
+        else:
+            self.start_eps = max(1.0 / 2.0, self.target_eps_normalized * self.theta)
 
     def solve(self):
         current_eps = self.start_eps
-        
-        # Discard dual warm-starts; rely on structural warm-starts (N_guess)
-        best_beta = None 
+        best_beta = self.initial_beta_normalized 
         final_assignment = None
         total_iterations = 0
         
