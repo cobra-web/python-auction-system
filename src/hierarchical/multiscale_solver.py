@@ -63,6 +63,7 @@ class HierarchicalMultiscaleSolver:
                                 allowed_edges.append((cell_to_idx_X[child_a], cell_to_idx_Y[child_b]))
         return allowed_edges
 
+    
     def solve(self):
         coarsest_gen = self.g - 1
         print(f"Starting Hierarchical Multiscale Solve (depth g={self.g})")
@@ -71,7 +72,7 @@ class HierarchicalMultiscaleSolver:
 
         C_hat, mu_X_hat, mu_Y_hat = self._build_coarsened_problem(coarsest_gen)
         manager = EpsScalingManager(AuctionOT, C_hat, mu_X=mu_X_hat, mu_Y=mu_Y_hat)
-        current_mu, _, _, current_beta = manager.solve()
+        current_mu, _, _, current_prices = manager.solve()
 
         for gen in range(coarsest_gen - 1, -1, -1):
             print(f"\n--- Refining to Generation {gen} ---")
@@ -87,7 +88,7 @@ class HierarchicalMultiscaleSolver:
             for i, fine_cell in enumerate(cells_Y_fine):
                 parent_cell = fine_cell.parent
                 if parent_cell in cell_to_idx_Y_coarse:
-                    current_beta_for_level[i] = current_beta[cell_to_idx_Y_coarse[parent_cell]]
+                    current_beta_for_level[i] = current_prices[cell_to_idx_Y_coarse[parent_cell]]
 
             checker.N_set = set(N_guess)
             checker.c_hat_cache.clear()
@@ -102,23 +103,26 @@ class HierarchicalMultiscaleSolver:
                     initial_beta=current_beta_for_level,
                     target_eps=None
                 )
-                current_mu, total_cost, total_iters, final_beta = hybrid_manager.solve()
-                current_beta_for_level = final_beta.copy()
+                current_mu, total_cost, total_iters, final_prices = hybrid_manager.solve()
+                current_beta_for_level = final_prices.copy()
 
-                # Grab the exposed absolute epsilon for the bounds check
                 target_eps_absolute = hybrid_manager.target_eps_absolute
+
+                # CRITICAL FIX: Invert positive auction prices to negative OT duals
+                beta_dual = -final_prices
 
                 alpha = np.full(len(mu_X_fine), np.inf, dtype=float)
                 for x in range(len(mu_X_fine)):
                     valid_ys = [y for (x_prime, y) in N_guess if x_prime == x]
                     if len(valid_ys) > 0:
-                        alpha[x] = np.min(C_fine[x, valid_ys] - final_beta[valid_ys])
+                        alpha[x] = np.min(C_fine[x, valid_ys] - beta_dual[valid_ys])
 
-                # Add 1e-9 slack to handle floating point precision artifacts
                 alpha_prime = alpha + target_eps_absolute + 1e-9
 
                 prev_len = len(checker.N_set)
-                checker.run_consistency_check(alpha_prime, final_beta, target_gen=gen)
+                
+                # Pass true OT duals (beta_dual) into consistency check
+                checker.run_consistency_check(alpha_prime, beta_dual, target_gen=gen)
                 added = len(checker.N_set) - prev_len
                 N_guess = list(checker.N_set)
 
@@ -133,7 +137,7 @@ class HierarchicalMultiscaleSolver:
                     break
 
             self.last_N_guess = N_guess
-            current_beta = final_beta
+            current_prices = final_prices
 
         print("\nReconstructing solution...")
         cells_X_fine = self.tree_X.generations[0]
