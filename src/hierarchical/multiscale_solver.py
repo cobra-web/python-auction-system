@@ -57,13 +57,24 @@ class HierarchicalMultiscaleSolver:
 
         C_hat, mu_X_hat, mu_Y_hat = self._build_coarsened_problem(coarsest_gen)
         manager = EpsScalingManager(AuctionOT, C_hat, mu_X=mu_X_hat, mu_Y=mu_Y_hat)
-        current_mu, _, _, _ = manager.solve() 
+        current_mu, _, _, current_beta = manager.solve() 
 
         for gen in range(coarsest_gen - 1, -1, -1):
             print(f"\n--- Refining to Generation {gen} ---")
 
             N_guess = self._induce_sparse_neighborhood(current_mu, gen + 1)
             C_fine, mu_X_fine, mu_Y_fine = self._build_coarsened_problem(gen)
+
+            cells_Y_fine = self.tree_Y.generations[gen]
+            cells_Y_coarse = self.tree_Y.generations[gen + 1]
+            cell_to_idx_Y_coarse = {cell: idx for idx, cell in enumerate(cells_Y_coarse)}
+
+            # WARM START RESTORED: Inherit dual variables from the parent generation
+            current_beta_for_level = np.zeros(len(cells_Y_fine), dtype=float)
+            for i, fine_cell in enumerate(cells_Y_fine):
+                parent_cell = fine_cell.parent
+                if parent_cell in cell_to_idx_Y_coarse:
+                    current_beta_for_level[i] = current_beta[cell_to_idx_Y_coarse[parent_cell]]
 
             checker.N_set = set(N_guess)
             checker.c_hat_cache.clear()
@@ -75,24 +86,26 @@ class HierarchicalMultiscaleSolver:
                 hybrid_manager = EpsScalingManager(
                     AuctionOT, C_fine, mu_X=mu_X_fine, mu_Y=mu_Y_fine,
                     allowed_edges=N_guess,
+                    initial_beta=current_beta_for_level,  # WARM START PASSED HERE
                     target_eps=None
                 )
-                current_mu, total_cost, total_iters, final_prices = hybrid_manager.solve()
+                current_mu, total_cost, total_iters, final_beta = hybrid_manager.solve()
+                
+                # Update beta for the next iteration of the consistency loop
+                current_beta_for_level = final_beta.copy()
                 target_eps_absolute = hybrid_manager.target_eps_absolute
 
-                # CRITICAL FIX: Convert Auction Prices to OT Dual Variables for mathematical bounds
-                beta_dual = -final_prices
-                
+                # SIGN INVERSION REMOVED: final_beta IS the correct mathematical OT dual.
                 alpha = np.full(len(mu_X_fine), np.inf, dtype=float)
                 for x in range(len(mu_X_fine)):
                     valid_ys = [y for (x_prime, y) in N_guess if x_prime == x]
                     if len(valid_ys) > 0:
-                        alpha[x] = np.min(C_fine[x, valid_ys] - beta_dual[valid_ys])
+                        alpha[x] = np.min(C_fine[x, valid_ys] - final_beta[valid_ys])
 
                 alpha_prime = alpha + target_eps_absolute + 1e-9
 
                 prev_len = len(checker.N_set)
-                checker.run_consistency_check(alpha_prime, beta_dual, target_gen=gen)
+                checker.run_consistency_check(alpha_prime, final_beta, target_gen=gen)
                 added = len(checker.N_set) - prev_len
                 N_guess = list(checker.N_set)
 
@@ -107,6 +120,7 @@ class HierarchicalMultiscaleSolver:
                     break
 
             self.last_N_guess = N_guess
+            current_beta = final_beta
 
         print("\nReconstructing solution...")
         cells_X_fine = self.tree_X.generations[0]
