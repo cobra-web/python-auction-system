@@ -20,13 +20,11 @@ class EpsScalingManager:
         
         # Compute target epsilon from cost distribution
         if target_eps is None:
-            unique_costs = np.unique(self.C_normalized)
-            if len(unique_costs) > 1:
-                delta_c = np.min(np.diff(unique_costs))
-            else:
-                delta_c = 1.0
+
+            relative_tolerance = 1e-4 * self.max_c
+            theoretical_bound = 1.0 / float(self.N_X + 1)
             
-            self.target_eps = delta_c / float(self.N_X)
+            self.target_eps = max(relative_tolerance. theoretical_bound)
         else:
             self.target_eps = target_eps
         
