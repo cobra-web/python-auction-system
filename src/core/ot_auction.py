@@ -124,9 +124,16 @@ class AuctionOT:
 
     def _place(self, x, y, chunk_idx, amount, new_beta_tilde):
         """Displaces a specific fraction of mass and establishes a new beta_tilde."""
+        # Guard against float dust placements entirely
+        if amount <= TOL: 
+            return 0.0
+
         if chunk_idx == -1:
             # Consuming free capacity
             take = min(amount, self.free_Y[y])
+            if take <= TOL: 
+                return 0.0
+            
             self.free_Y[y] -= take
             self.mu[x, y] += take
             self.y_chunks[y].append([new_beta_tilde, x, take])
@@ -135,6 +142,8 @@ class AuctionOT:
             # Displacing a specific owned chunk
             chunk = self.y_chunks[y][chunk_idx]
             take = min(amount, chunk[2])
+            if take <= TOL: 
+                return 0.0
             
             chunk[2] -= take               # Reduce mass of displaced chunk
             self.mu[chunk[1], y] -= take   # Update global mu for displaced owner
@@ -172,27 +181,29 @@ class AuctionOT:
                 alpha_prime, m_idx = self._marginal_alpha_prime(slacks, caps, r)
 
                 remaining = r
+                touched_ys = set()  # Track which y's we modify to clean them safely later
+                
                 for i in range(m_idx + 1):
                     if remaining <= TOL:
                         break
                     y = ys[i]
                     chunk_idx = chunk_indices[i]
                     
-                    # Establish the new beta_tilde for this specific chunk assignment
                     new_beta_tilde = self.C[x, y] - alpha_prime - eps
                     
                     placed = self._place(x, y, chunk_idx, remaining, new_beta_tilde)
-                    remaining -= placed
-                    moved_this_sweep += placed
+                    if placed > 0:
+                        touched_ys.add(y)
+                        remaining -= placed
+                        moved_this_sweep += placed
 
-                iterations += 1
-                if iterations >= max_iterations:
-                    break
+                # IMMEDIATE CLEANUP: Prevent list bloat without breaking indices mid-loop
+                for ty in touched_ys:
+                    self.y_chunks[ty] = [c for c in self.y_chunks[ty] if c[2] > TOL]
 
-            # Periodic cleanup of float-dust chunks to keep tracking fast
-            if iterations % 100 == 0:
-                for y in range(self.N_Y):
-                    self.y_chunks[y] = [c for c in self.y_chunks[y] if c[2] > TOL]
+            iterations += 1
+            if iterations >= max_iterations:
+                break
 
             if moved_this_sweep <= TOL:
                 print(f"[AuctionOT] Deadlock at iter {iterations}; unassigned = {total_unassigned:.3e}.")
