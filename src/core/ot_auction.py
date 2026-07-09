@@ -4,7 +4,7 @@ TOL = 1e-7
 
 class AuctionOT:
     """
-    Forward auction implementing strict 2D dual variable splitting: 
+    Forward auction implementing strict 2D dual variable splitting using dense matrices.
     beta_tilde(x, y) for occupied mass and beta(diamond, y) for free capacity.
     """
 
@@ -30,19 +30,19 @@ class AuctionOT:
             raise ValueError("Unbalanced OT problem. Sum of marginals must match.")
 
         self.epsilon = float(epsilon) if epsilon is not None else 1e-3
+        
+        # --- State Matrices ---
+        # mu tracks exactly how much mass x owns in y
         self.mu = np.zeros((self.N_X, self.N_Y), dtype=float)
 
-        # --- 2D Dual Variable Tracking ---
-        # 1. beta_diamond tracks the price of unassigned (free) capacity in y.
+        # beta_diamond tracks the baseline price of unassigned (free) capacity in y
         if initial_beta is not None:
             self.beta_diamond = np.array(initial_beta, dtype=float)
         else:
             self.beta_diamond = np.zeros(self.N_Y, dtype=float)
         
-        # 2. y_chunks tracks beta_tilde. 
-        # For each y, we maintain a list of [beta_tilde, x_owner, mass_amount]
-        self.y_chunks = [[] for _ in range(self.N_Y)]
-        self.free_Y = np.copy(self.mu_Y)
+        # beta_tilde tracks the price of occupied capacity for each (x, y) pair
+        self.beta_tilde = np.zeros((self.N_X, self.N_Y), dtype=float)
 
         if allowed_edges is not None:
             nbrs = [[] for _ in range(self.N_X)]
@@ -57,9 +57,10 @@ class AuctionOT:
         """Returns the effective 1D beta(y) for warm-starting the next epsilon phase."""
         eff_beta = np.copy(self.beta_diamond)
         for y in range(self.N_Y):
-            if len(self.y_chunks[y]) > 0:
-                max_tilde = max(chunk[0] for chunk in self.y_chunks[y])
-                eff_beta[y] = max(eff_beta[y], max_tilde)
+            # Find which sources actually own mass in y
+            active_x = np.where(self.mu[:, y] > TOL)[0]
+            if len(active_x) > 0:
+                eff_beta[y] = max(eff_beta[y], np.max(self.beta_tilde[active_x, y]))
         return eff_beta
 
     def _admissible(self, x):
@@ -70,7 +71,7 @@ class AuctionOT:
     def _sorted_slots(self, x):
         """
         Build Pi(x): Evaluates free capacity via beta(diamond, y) AND 
-        occupied capacity via beta_tilde(x', y). 
+        occupied capacity via beta_tilde(x', y) using vectorized lookups.
         """
         ys = self._admissible(x)
         if ys.size == 0:
@@ -78,35 +79,51 @@ class AuctionOT:
 
         candidates = []
         
-        for y in ys:
-            # Evaluate unassigned capacity using beta(diamond, y)
-            free = self.free_Y[y]
-            if free > TOL:
-                slack = self.C[x, y] - self.beta_diamond[y]
-                # chunk_idx = -1 denotes free space
-                candidates.append((slack, free, y, -1))
-            
-            # Evaluate specific occupied chunks using beta_tilde(x', y)
-            for i, chunk in enumerate(self.y_chunks[y]):
-                b_tilde, x_owner, mass = chunk
-                if x_owner != x and mass > TOL:
-                    slack = self.C[x, y] - b_tilde
-                    candidates.append((slack, mass, y, i))
+        # 1. Evaluate Free Capacity
+        # Calculate current free space across all admissible y
+        free_Y = self.mu_Y[ys] - np.sum(self.mu[:, ys], axis=0)
+        free_mask = free_Y > TOL
+        
+        if np.any(free_mask):
+            valid_ys = ys[free_mask]
+            slacks = self.C[x, valid_ys] - self.beta_diamond[valid_ys]
+            caps = free_Y[free_mask]
+            for i in range(len(valid_ys)):
+                # -1 indicates this candidate is free capacity
+                candidates.append((slacks[i], caps[i], valid_ys[i], -1))
+
+        # 2. Evaluate Occupied Capacity
+        # Look at the mu matrix for admissible targets
+        mu_sub = self.mu[:, ys]
+        
+        # Find coordinates (x', y_idx) where mass exists
+        xp_indices, y_indices = np.nonzero(mu_sub > TOL)
+        
+        # Filter out x itself (a source cannot displace its own mass)
+        other_mask = xp_indices != x
+        xp_indices = xp_indices[other_mask]
+        y_indices = y_indices[other_mask]
+
+        if len(xp_indices) > 0:
+            actual_ys = ys[y_indices]
+            # Vectorized slack calculation using the beta_tilde matrix
+            slacks = self.C[x, actual_ys] - self.beta_tilde[xp_indices, actual_ys]
+            caps = mu_sub[xp_indices, y_indices]
+            for i in range(len(xp_indices)):
+                candidates.append((slacks[i], caps[i], actual_ys[i], xp_indices[i]))
 
         if not candidates:
             return None
 
-        # Sort all candidates by reduced cost (slack) ascending. 
-        # Because slack = c - beta, sorting ascending naturally places the chunks 
-        # with the HIGHEST beta (most optimal to displace) at the front of the list.
+        # Sort ascending by slack (lowest reduced cost wins)
         candidates.sort(key=lambda item: item[0])
         
         slacks = np.array([c[0] for c in candidates])
         caps = np.array([c[1] for c in candidates])
         ys_arr = np.array([c[2] for c in candidates], dtype=int)
-        chunk_indices = np.array([c[3] for c in candidates], dtype=int)
+        xp_arr = np.array([c[3] for c in candidates], dtype=int)
         
-        return ys_arr, slacks, caps, chunk_indices
+        return ys_arr, slacks, caps, xp_arr
 
     @staticmethod
     def _marginal_alpha_prime(slacks, caps, demand):
@@ -122,34 +139,31 @@ class AuctionOT:
                 return slacks[i], i
         return slacks[-1], n - 1
 
-    def _place(self, x, y, chunk_idx, amount, new_beta_tilde):
-        """Displaces a specific fraction of mass and establishes a new beta_tilde."""
-        # Guard against float dust placements entirely
-        if amount <= TOL: 
+    def _place(self, x, y, owner_xp, amount, new_beta_tilde):
+        """Moves mass and strictly assigns the new beta_tilde price in the matrix."""
+        if amount <= TOL:
             return 0.0
-
-        if chunk_idx == -1:
+            
+        if owner_xp == -1:
             # Consuming free capacity
-            take = min(amount, self.free_Y[y])
+            free = self.mu_Y[y] - np.sum(self.mu[:, y])
+            take = min(amount, free)
             if take <= TOL: 
                 return 0.0
             
-            self.free_Y[y] -= take
             self.mu[x, y] += take
-            self.y_chunks[y].append([new_beta_tilde, x, take])
+            self.beta_tilde[x, y] = new_beta_tilde
             return take
         else:
-            # Displacing a specific owned chunk
-            chunk = self.y_chunks[y][chunk_idx]
-            take = min(amount, chunk[2])
+            # Displacing mass owned by owner_xp
+            avail = self.mu[owner_xp, y]
+            take = min(amount, avail)
             if take <= TOL: 
                 return 0.0
             
-            chunk[2] -= take               # Reduce mass of displaced chunk
-            self.mu[chunk[1], y] -= take   # Update global mu for displaced owner
-            
-            self.mu[x, y] += take          # Update global mu for new owner
-            self.y_chunks[y].append([new_beta_tilde, x, take]) # Register new beta_tilde
+            self.mu[owner_xp, y] -= take
+            self.mu[x, y] += take
+            self.beta_tilde[x, y] = new_beta_tilde
             return take
 
     def solve(self):
@@ -176,30 +190,23 @@ class AuctionOT:
                 slots = self._sorted_slots(x)
                 if slots is None:
                     continue
-                ys, slacks, caps, chunk_indices = slots
+                ys, slacks, caps, xp_arr = slots
 
                 alpha_prime, m_idx = self._marginal_alpha_prime(slacks, caps, r)
 
                 remaining = r
-                touched_ys = set()  # Track which y's we modify to clean them safely later
-                
                 for i in range(m_idx + 1):
                     if remaining <= TOL:
                         break
                     y = ys[i]
-                    chunk_idx = chunk_indices[i]
+                    owner_xp = xp_arr[i]
                     
                     new_beta_tilde = self.C[x, y] - alpha_prime - eps
                     
-                    placed = self._place(x, y, chunk_idx, remaining, new_beta_tilde)
+                    placed = self._place(x, y, owner_xp, remaining, new_beta_tilde)
                     if placed > 0:
-                        touched_ys.add(y)
                         remaining -= placed
                         moved_this_sweep += placed
-
-                # IMMEDIATE CLEANUP: Prevent list bloat without breaking indices mid-loop
-                for ty in touched_ys:
-                    self.y_chunks[ty] = [c for c in self.y_chunks[ty] if c[2] > TOL]
 
             iterations += 1
             if iterations >= max_iterations:
