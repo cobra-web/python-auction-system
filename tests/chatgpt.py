@@ -1,3 +1,6 @@
+import numpy as np
+
+
 min_all = np.min(C_fine[x] - beta)
 min_sparse = np.min(C_fine[x,valid] - beta[valid])
 
