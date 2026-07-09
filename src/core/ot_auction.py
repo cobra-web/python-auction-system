@@ -3,10 +3,6 @@ import numpy as np
 TOL = 1e-7
 
 class AuctionOT:
-    """
-    Highly optimized Forward auction implementing 2D dual variable splitting.
-    Uses pure vectorized NumPy operations and O(1) state tracking to eliminate Python loop overhead.
-    """
 
     def __init__(self, cost_matrix, mu_X, mu_Y, epsilon=None,
                  allowed_edges=None, initial_beta=None, normalize=True):
