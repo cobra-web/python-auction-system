@@ -6,31 +6,33 @@ class EpsScalingManager:
     def __init__(self, solver_class, cost_matrix, theta=5.0, target_eps=None, initial_beta=None, **solver_kwargs):
         self.solver_class = solver_class
         self.C_original = np.array(cost_matrix, dtype=float)  # Store original for cost computation
-        self.C_normalized = self.C_original.copy()  # Will be normalized for solver
         
+        # FIX: Save max_c as an instance attribute so we can use it for tolerances
+        self.max_c = np.max(np.abs(self.C_original))
+        if self.max_c == 0:
+            self.max_c = 1.0  # Prevent division by zero
+            
         # Normalize cost matrix for numerical stability
-        max_c = np.max(np.abs(self.C_original))
-        if max_c > 0:
-            self.C_normalized = self.C_original / max_c
+        self.C_normalized = self.C_original / self.max_c
         
         self.theta = theta
         self.solver_kwargs = solver_kwargs
         self.N_X, self.N_Y = self.C_original.shape
         self.initial_beta = initial_beta
         
-        # Compute target epsilon from cost distribution
+        # FIX: Compute target epsilon robustly to avoid floating-point stalls
         if target_eps is None:
-
             relative_tolerance = 1e-4 * self.max_c
             theoretical_bound = 1.0 / float(self.N_X + 1)
             
-            self.target_eps = max(relative_tolerance. theoretical_bound)
+            # Use the larger of the two to prevent microscopic epsilons
+            self.target_eps = max(relative_tolerance, theoretical_bound)
         else:
             self.target_eps = target_eps
         
         # Initialize epsilon for first scaling phase
-        C_max = np.max(self.C_normalized)
-        self.start_eps = max(C_max / 2.0, self.target_eps * self.theta)
+        C_max_normalized = np.max(self.C_normalized)
+        self.start_eps = max(C_max_normalized / 2.0, self.target_eps * self.theta)
 
     def solve(self):
         current_eps = self.start_eps
