@@ -1,87 +1,123 @@
 import numpy as np
 
+
 class EpsScalingManager:
-
-    @staticmethod
-    def compute_target_eps_absolute(cost_matrix, target_eps=None):
-        """
-        Pure function version of the target_eps_absolute calculation below.
-        Depends only on the cost matrix and the requested target_eps -- NOT
-        on allowed_edges, mu_X/mu_Y, or any solver state -- so it can be
-        computed for a generation's cost matrix before a neighborhood has
-        been chosen, e.g. to certify a sparse neighborhood before ever
-        constructing/solving with it.
-        """
-        C = np.asarray(cost_matrix, dtype=float)
-        max_c = np.max(np.abs(C))
-        if max_c == 0:
-            max_c = 1.0
-        target_eps_normalized = 1e-4 if target_eps is None else target_eps / max_c
-        return target_eps_normalized * max_c
-
+    
     def __init__(self, solver_class, cost_matrix, theta=5.0, target_eps=None, initial_beta=None, **solver_kwargs):
         self.solver_class = solver_class
-        self.C_original = np.array(cost_matrix, dtype=float) 
+        self.C_original = np.array(cost_matrix, dtype=float)  # Store original for cost computation
+        self.C_normalized = self.C_original.copy()  # Will be normalized for solver
         
-        self.max_c = np.max(np.abs(self.C_original))
-        if self.max_c == 0: self.max_c = 1.0
-            
-        self.C_normalized = self.C_original / self.max_c
+        # Normalize cost matrix for numerical stability
+        max_c = np.max(np.abs(self.C_original))
+        if max_c > 0:
+            self.C_normalized = self.C_original / max_c
+        
         self.theta = theta
         self.solver_kwargs = solver_kwargs
         self.N_X, self.N_Y = self.C_original.shape
+        self.initial_beta = initial_beta
         
-        self.initial_beta_normalized = initial_beta / self.max_c if initial_beta is not None else None
-        
-        self.target_eps_absolute = self.compute_target_eps_absolute(self.C_original, target_eps)
-        self.target_eps_normalized = self.target_eps_absolute / self.max_c
-        
-        # WARM START FIX: Give the solver a short 2-phase adjustment window 
-        # to adapt to newly added edges without resetting all the way to 0.5.
-        if self.initial_beta_normalized is not None:
-            self.start_eps = max(self.target_eps_normalized * (self.theta ** 2), self.target_eps_normalized)
+        # Compute target epsilon from cost distribution
+        if target_eps is None:
+            unique_costs = np.unique(self.C_normalized)
+            if len(unique_costs) > 1:
+                delta_c = np.min(np.diff(unique_costs))
+            else:
+                delta_c = 1.0
+            
+            self.target_eps = delta_c / float(self.N_X)
         else:
-            self.start_eps = max(1.0 / 2.0, self.target_eps_normalized * self.theta)
+            self.target_eps = target_eps
+        
+        # Initialize epsilon for first scaling phase
+        C_max = np.max(self.C_normalized)
+        self.start_eps = max(C_max / 2.0, self.target_eps * self.theta)
 
     def solve(self):
         current_eps = self.start_eps
-        best_beta = self.initial_beta_normalized 
+        best_beta = self.initial_beta
         final_assignment = None
         total_iterations = 0
         
-        while current_eps >= self.target_eps_normalized:
-            solver = self.solver_class(
-                self.C_normalized, 
-                epsilon=current_eps, 
-                **self.solver_kwargs
-            )
+        print(f"Starting eps-scaling. Start eps: {current_eps:.6f}, Target eps: {self.target_eps:.6f}")
+        
+        # eps-scaling loop: progressively decrease epsilon
+        while current_eps >= self.target_eps:
+            print(f"  -> Solving for eps = {current_eps:.6f}")
             
+            # Create solver with normalized cost matrix
+            # CRITICAL: Pass solver_kwargs which contain mu_X, mu_Y, allowed_edges, etc.
+            try:
+                solver = self.solver_class(
+                    self.C_normalized, 
+                    epsilon=current_eps, 
+                    **self.solver_kwargs
+                )
+            except TypeError as e:
+                print(f"ERROR creating solver: {e}")
+                print(f"  solver_class: {self.solver_class}")
+                print(f"  C_normalized shape: {self.C_normalized.shape}")
+                print(f"  solver_kwargs keys: {self.solver_kwargs.keys()}")
+                for key, val in self.solver_kwargs.items():
+                    if isinstance(val, np.ndarray):
+                        print(f"    {key}: array of shape {val.shape}, dtype {val.dtype}")
+                    else:
+                        print(f"    {key}: {type(val).__name__} = {val}")
+                raise
+            
+            # Warm-start with previous beta (if available)
             if best_beta is not None:
-                solver.beta = np.copy(best_beta)
+                self._inject_beta(solver, best_beta)
             
+            # Run auction with fixed epsilon
             result = solver.solve()
             
+            # Unpack result (always returns 3-tuple: (mu, cost, iterations))
             if len(result) == 3:
                 final_assignment, _, iters = result
             else:
                 final_assignment, _, iters = result[:3]
             
             total_iterations += iters
-            best_beta = np.copy(solver.beta)
             
-            if current_eps <= self.target_eps_normalized:
+            # Extract dual variables for next epsilon phase
+            best_beta = self._extract_beta(solver)
+            
+            # Check if we're done with this epsilon
+            if current_eps <= self.target_eps:
                 break
             
-            current_eps = max(current_eps / self.theta, self.target_eps_normalized)
+            # Reduce epsilon for next iteration
+            current_eps = max(current_eps / self.theta, self.target_eps)
         
+        print(f"eps-scaling complete in {total_iterations} total iterations.")
+        
+        # Compute final cost using ORIGINAL cost matrix (not normalized)
         true_cost = self._calculate_final_cost(final_assignment)
-        return final_assignment, true_cost, total_iterations, best_beta * self.max_c
+        
+        return final_assignment, true_cost, total_iterations, best_beta
+
+    def _inject_beta(self, solver, old_beta):
+        solver.beta = np.copy(old_beta)
+
+    def _extract_beta(self, solver):
+        return np.copy(solver.beta)
 
     def _calculate_final_cost(self, assignment):
         if assignment is None:
-            raise ValueError("Assignment is None")
+            raise ValueError("Assignment is None; solver failed to produce output")
+        
+        # Handle both 1D (permutation) and 2D (coupling) assignments
         if assignment.ndim == 1:
+            # 1D assignment (permutation): assignment[x] = y for each x
             cost = sum(self.C_original[x, int(assignment[x])] for x in range(self.N_X))
         elif assignment.ndim == 2:
+            # 2D assignment (coupling matrix)
+            if assignment.shape != self.C_original.shape:
+                raise ValueError(f"Assignment shape {assignment.shape} doesn't match cost shape {self.C_original.shape}")
             cost = np.sum(assignment * self.C_original)
+        else:
+            raise ValueError(f"Assignment has unexpected shape: {assignment.shape}")
+        
         return float(cost)
