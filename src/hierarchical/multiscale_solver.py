@@ -96,13 +96,28 @@ class HierarchicalMultiscaleSolver:
                 target_eps_absolute = hybrid_manager.target_eps_absolute
 
                 # SIGN INVERSION REMOVED: final_beta IS the correct mathematical OT dual.
+
+
                 alpha = np.full(len(mu_X_fine), np.inf, dtype=float)
+
                 for x in range(len(mu_X_fine)):
                     valid_ys = [y for (x_prime, y) in N_guess if x_prime == x]
+
                     if len(valid_ys) > 0:
-                        alpha[x] = np.min(C_fine[x, valid_ys] - final_beta[valid_ys])
+                        min_sparse = np.min(C_fine[x, valid_ys] - final_beta[valid_ys])
+                        min_all = np.min(C_fine[x] - final_beta)
+
+                        print(
+                            f"x={x:3d} "
+                            f"gap={min_sparse-min_all:.3e} "
+                            f"sparse={min_sparse:.6f} "
+                            f"all={min_all:.6f}"
+                        )
+
+                        alpha[x] = min_sparse
 
                 alpha_prime = alpha + target_eps_absolute + 1e-9
+                
 
                 prev_len = len(checker.N_set)
                 checker.run_consistency_check(alpha_prime, final_beta, target_gen=gen)
