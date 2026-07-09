@@ -134,14 +134,16 @@ class AuctionOT:
     
     def solve(self):
         iterations = 0
-        max_iterations = 100000
+        # CRITICAL FIX: 100,000 is far too low for dense epsilon-scaling.
+        # It takes ~10,000 bids to raise a price by 1.0 when epsilon is 1e-4.
+        max_iterations = 2000000 
         
         while iterations < max_iterations:
             # Compute unassigned mass for each source
             assigned_X = np.sum(self.mu, axis=1)
             unassigned_X = self.mu_X - assigned_X
             
-            # Check convergence: all mass assigned (up to TOL)
+            # Check convergence
             total_unassigned = np.sum(unassigned_X)
             if total_unassigned < TOL:
                 print(f"  Auction converged after {iterations} iterations")
@@ -151,7 +153,6 @@ class AuctionOT:
             x = np.argmax(unassigned_X)
             mass_to_assign = unassigned_X[x]
             
-            # Skip if this source has negligible unassigned mass (below tolerance)
             if mass_to_assign < TOL:
                 iterations += 1
                 continue
@@ -177,17 +178,19 @@ class AuctionOT:
             price_gap = second_val - best_val
             price_increment = max(self.epsilon, price_gap + 1e-12)
             
-            # CRITICAL: Prices ALWAYS increase (beta gets MORE NEGATIVE)
+            # Prices ALWAYS increase (beta gets MORE NEGATIVE)
             self.beta[best_y] -= price_increment
             
             # ===== ASSIGN MASS TO BEST TARGET =====
-            # We assign whatever we can. If we don't assign it all because the target
-            # is saturated with our own mass, THAT IS FINE! The iteration ends, and x 
-            # will simply re-evaluate the new prices on the next loop pass.
+            # If the target is full, x will displace others. The displaced mass
+            # goes back into the unassigned pool, preserving the total unassigned 
+            # mass until an empty target is finally reached.
             self._assign_mass_to_target(x, best_y, mass_to_assign)
             
             iterations += 1
-            if iterations % 10000 == 0:
+            
+            # Reduce print spam for the longer runway
+            if iterations % 50000 == 0:
                 print(f"  Iteration {iterations}: total unassigned mass = {total_unassigned:.9f}", 
                       file=sys.stderr)
         
