@@ -8,7 +8,8 @@ class PartitionCell:
         self.children = []
         self.depth = depth                  # Root = 0
         self.generation = -1                # Leaves = 0
-
+        self.bbox = bbox #tuple of min and max bounds)
+    
     def __repr__(self):
         return f"Cell(id={self.id}, gen={self.generation}, pts={len(self.point_indices)})"
 
