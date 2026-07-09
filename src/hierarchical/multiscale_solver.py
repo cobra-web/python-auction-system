@@ -160,6 +160,8 @@ class HierarchicalMultiscaleSolver:
                 current_beta_for_level = final_beta.copy()
                 target_eps = hybrid_manager.target_eps
 
+                checker.c_hat_cache = {}
+
                 # Extract dual certificates from solution
                 alpha = np.full(len(mu_X_fine), np.inf, dtype=float)
                 for x in range(len(mu_X_fine)):
