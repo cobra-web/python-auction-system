@@ -4,8 +4,8 @@ TOL = 1e-7
 
 class AuctionOT:
     """
-    Forward auction implementing strict 2D dual variable splitting using dense matrices.
-    beta_tilde(x, y) for occupied mass and beta(diamond, y) for free capacity.
+    Highly optimized Forward auction implementing 2D dual variable splitting.
+    Uses pure vectorized NumPy operations and O(1) state tracking to eliminate Python loop overhead.
     """
 
     def __init__(self, cost_matrix, mu_X, mu_Y, epsilon=None,
@@ -32,16 +32,17 @@ class AuctionOT:
         self.epsilon = float(epsilon) if epsilon is not None else 1e-3
         
         # --- State Matrices ---
-        # mu tracks exactly how much mass x owns in y
         self.mu = np.zeros((self.N_X, self.N_Y), dtype=float)
+        
+        # O(1) Incremental mass trackers (Eliminates np.sum in inner loops)
+        self.assigned_Y = np.zeros(self.N_Y, dtype=float)
+        self.unassigned_X = np.copy(self.mu_X)
 
-        # beta_diamond tracks the baseline price of unassigned (free) capacity in y
         if initial_beta is not None:
             self.beta_diamond = np.array(initial_beta, dtype=float)
         else:
             self.beta_diamond = np.zeros(self.N_Y, dtype=float)
         
-        # beta_tilde tracks the price of occupied capacity for each (x, y) pair
         self.beta_tilde = np.zeros((self.N_X, self.N_Y), dtype=float)
 
         if allowed_edges is not None:
@@ -54,10 +55,8 @@ class AuctionOT:
             self.neighbors = None
 
     def get_effective_beta(self):
-        """Returns the effective 1D beta(y) for warm-starting the next epsilon phase."""
         eff_beta = np.copy(self.beta_diamond)
         for y in range(self.N_Y):
-            # Find which sources actually own mass in y
             active_x = np.where(self.mu[:, y] > TOL)[0]
             if len(active_x) > 0:
                 eff_beta[y] = max(eff_beta[y], np.max(self.beta_tilde[active_x, y]))
@@ -69,61 +68,46 @@ class AuctionOT:
         return self.neighbors[x]
 
     def _sorted_slots(self, x):
-        """
-        Build Pi(x): Evaluates free capacity via beta(diamond, y) AND 
-        occupied capacity via beta_tilde(x', y) using vectorized lookups.
-        """
+        """Pure vectorized candidate generation. No Python list appends."""
         ys = self._admissible(x)
         if ys.size == 0:
             return None
 
-        candidates = []
-        
         # 1. Evaluate Free Capacity
-        # Calculate current free space across all admissible y
-        free_Y = self.mu_Y[ys] - np.sum(self.mu[:, ys], axis=0)
+        free_Y = self.mu_Y[ys] - self.assigned_Y[ys]
         free_mask = free_Y > TOL
         
-        if np.any(free_mask):
-            valid_ys = ys[free_mask]
-            slacks = self.C[x, valid_ys] - self.beta_diamond[valid_ys]
-            caps = free_Y[free_mask]
-            for i in range(len(valid_ys)):
-                # -1 indicates this candidate is free capacity
-                candidates.append((slacks[i], caps[i], valid_ys[i], -1))
+        valid_ys_free = ys[free_mask]
+        slacks_free = self.C[x, valid_ys_free] - self.beta_diamond[valid_ys_free]
+        caps_free = free_Y[free_mask]
+        xp_free = np.full(len(valid_ys_free), -1, dtype=int)
 
         # 2. Evaluate Occupied Capacity
-        # Look at the mu matrix for admissible targets
         mu_sub = self.mu[:, ys]
+        xp_indices, y_idx_local = np.nonzero(mu_sub > TOL)
         
-        # Find coordinates (x', y_idx) where mass exists
-        xp_indices, y_indices = np.nonzero(mu_sub > TOL)
-        
-        # Filter out x itself (a source cannot displace its own mass)
+        # Fast filter to exclude x displacing itself
         other_mask = xp_indices != x
         xp_indices = xp_indices[other_mask]
-        y_indices = y_indices[other_mask]
+        y_idx_local = y_idx_local[other_mask]
 
-        if len(xp_indices) > 0:
-            actual_ys = ys[y_indices]
-            # Vectorized slack calculation using the beta_tilde matrix
-            slacks = self.C[x, actual_ys] - self.beta_tilde[xp_indices, actual_ys]
-            caps = mu_sub[xp_indices, y_indices]
-            for i in range(len(xp_indices)):
-                candidates.append((slacks[i], caps[i], actual_ys[i], xp_indices[i]))
+        actual_ys = ys[y_idx_local]
+        slacks_occ = self.C[x, actual_ys] - self.beta_tilde[xp_indices, actual_ys]
+        caps_occ = mu_sub[xp_indices, y_idx_local]
 
-        if not candidates:
+        # Combine all candidates dynamically
+        slacks = np.concatenate((slacks_free, slacks_occ))
+        if slacks.size == 0:
             return None
 
-        # Sort ascending by slack (lowest reduced cost wins)
-        candidates.sort(key=lambda item: item[0])
+        caps = np.concatenate((caps_free, caps_occ))
+        ys_arr = np.concatenate((valid_ys_free, actual_ys))
+        xp_arr = np.concatenate((xp_free, xp_indices))
         
-        slacks = np.array([c[0] for c in candidates])
-        caps = np.array([c[1] for c in candidates])
-        ys_arr = np.array([c[2] for c in candidates], dtype=int)
-        xp_arr = np.array([c[3] for c in candidates], dtype=int)
+        # Sort ascending by slack
+        order = np.argsort(slacks, kind="stable")
         
-        return ys_arr, slacks, caps, xp_arr
+        return ys_arr[order], slacks[order], caps[order], xp_arr[order]
 
     @staticmethod
     def _marginal_alpha_prime(slacks, caps, demand):
@@ -140,18 +124,20 @@ class AuctionOT:
         return slacks[-1], n - 1
 
     def _place(self, x, y, owner_xp, amount, new_beta_tilde):
-        """Moves mass and strictly assigns the new beta_tilde price in the matrix."""
+        """Moves mass and updates tracking arrays in O(1) time."""
         if amount <= TOL:
             return 0.0
             
         if owner_xp == -1:
             # Consuming free capacity
-            free = self.mu_Y[y] - np.sum(self.mu[:, y])
+            free = self.mu_Y[y] - self.assigned_Y[y]
             take = min(amount, free)
             if take <= TOL: 
                 return 0.0
             
             self.mu[x, y] += take
+            self.assigned_Y[y] += take
+            self.unassigned_X[x] -= take
             self.beta_tilde[x, y] = new_beta_tilde
             return take
         else:
@@ -163,6 +149,8 @@ class AuctionOT:
             
             self.mu[owner_xp, y] -= take
             self.mu[x, y] += take
+            self.unassigned_X[owner_xp] += take
+            self.unassigned_X[x] -= take
             self.beta_tilde[x, y] = new_beta_tilde
             return take
 
@@ -172,10 +160,9 @@ class AuctionOT:
         eps = self.epsilon
 
         while iterations < max_iterations:
-            assigned = np.sum(self.mu, axis=1)
-            unassigned = self.mu_X - assigned
-            unassigned = np.where(unassigned < TOL, 0.0, unassigned)
-            total_unassigned = float(unassigned.sum())
+            # Snap unassigned mass dynamically rather than computing np.sum(mu)
+            self.unassigned_X = np.where(self.unassigned_X < TOL, 0.0, self.unassigned_X)
+            total_unassigned = float(np.sum(self.unassigned_X))
 
             if total_unassigned <= TOL:
                 break
@@ -183,7 +170,7 @@ class AuctionOT:
             moved_this_sweep = 0.0
 
             for x in range(self.N_X):
-                r = unassigned[x]
+                r = self.unassigned_X[x]
                 if r <= TOL:
                     continue
 
