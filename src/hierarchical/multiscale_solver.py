@@ -167,26 +167,29 @@ class HierarchicalMultiscaleSolver:
                     if len(valid_ys) > 0:
                         alpha[x] = np.min(C_fine[x, valid_ys] - final_beta[valid_ys])
 
-                # ===== NEW: CALCULATE SCHMITZER'S GEOMETRIC SLACK =====
+# ===== NEW: CALCULATE SCHMITZER'S GEOMETRIC SLACK =====
                 alpha_prime = np.zeros_like(alpha)
                 for x in range(len(mu_X_fine)):
                     parent_cell_X = cells_X_fine[x].parent
                     max_cell_slack = 0.0
                     
+                    # Get the fine targets (y) that x is actively connected to in the sparse graph
+                    valid_ys = [y for (x_prime, y) in N_guess if x_prime == x]
+                    
                     # Safely check if the parent cell exists and has a bounding box stored
                     if parent_cell_X is not None and getattr(parent_cell_X, 'bbox', None) is not None:
-                        for y_coarse_idx, cell_Y_coarse in enumerate(cells_Y_coarse):
-                            # Only calculate geometric error over edges active in the coarse solution
-                            if current_mu[cell_to_idx_X_coarse[parent_cell_X], y_coarse_idx] > 1e-9:
-                                if getattr(cell_Y_coarse, 'bbox', None) is not None:
-                                    boxA_min, boxA_max = parent_cell_X.bbox
-                                    boxB_min, boxB_max = cell_Y_coarse.bbox
-                                    
-                                    c_min = self.bounding_box_lower_bound(boxA_min, boxA_max, boxB_min, boxB_max)
-                                    c_max = self.bounding_box_upper_bound(boxA_min, boxA_max, boxB_min, boxB_max)
-                                    max_cell_slack = max(max_cell_slack, c_max - c_min)
+                        for y in valid_ys:
+                            parent_cell_Y = cells_Y_fine[y].parent
+                            if parent_cell_Y is not None and getattr(parent_cell_Y, 'bbox', None) is not None:
+                                boxA_min, boxA_max = parent_cell_X.bbox
+                                boxB_min, boxB_max = parent_cell_Y.bbox
+                                
+                                # Calculate geometric variance between these parent cells
+                                c_min = self.bounding_box_lower_bound(boxA_min, boxA_max, boxB_min, boxB_max)
+                                c_max = self.bounding_box_upper_bound(boxA_min, boxA_max, boxB_min, boxB_max)
+                                max_cell_slack = max(max_cell_slack, c_max - c_min)
                     
-                    # Inflate alpha_prime by the target_eps AND the geometric variance bounds
+                    # Inflate alpha_prime by target_eps AND the geometric variance bounds
                     alpha_prime[x] = alpha[x] + target_eps + 1e-9 + max_cell_slack
 
                 # ===== CONSISTENCY CHECK: Expand N_guess if needed =====
