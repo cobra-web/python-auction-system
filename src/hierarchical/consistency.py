@@ -1,3 +1,4 @@
+# src/hierarchical/consistency.py
 import numpy as np
 
 class ConsistencyChecker:
