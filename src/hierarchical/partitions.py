@@ -1,14 +1,15 @@
 import numpy as np
 
 class PartitionCell:
-    def __init__(self, cell_id, point_indices, depth=0):
+    # 1. FIX: Added bbox=None to the parameters
+    def __init__(self, cell_id, point_indices, depth=0, bbox=None):
         self.id = cell_id
         self.point_indices = point_indices  
         self.parent = None
         self.children = []
         self.depth = depth                  # Root = 0
         self.generation = -1                # Leaves = 0
-        self.bbox = bbox #tuple of min and max bounds)
+        self.bbox = bbox                    # tuple: (min_bounds, max_bounds)
     
     def __repr__(self):
         return f"Cell(id={self.id}, gen={self.generation}, pts={len(self.point_indices)})"
@@ -31,7 +32,8 @@ class HierarchicalPartition:
         root_indices = list(range(len(self.points)))
         root_bbox = (np.min(self.points, axis=0), np.max(self.points, axis=0))
         
-        root_cell = PartitionCell(self._cell_counter, root_indices, depth=0)
+        # 2. FIX: Pass root_bbox to the root cell
+        root_cell = PartitionCell(self._cell_counter, root_indices, depth=0, bbox=root_bbox)
         self.cells.append(root_cell)
         self._cell_counter += 1
         
@@ -86,7 +88,8 @@ class HierarchicalPartition:
                 else:
                     new_max[dim] = mid_b[dim]
                     
-            child_cell = PartitionCell(self._cell_counter, indices, depth=depth + 1)
+            # 3. FIX: Pass the newly calculated (new_min, new_max) to the child cell
+            child_cell = PartitionCell(self._cell_counter, indices, depth=depth + 1, bbox=(new_min, new_max))
             self._cell_counter += 1
             child_cell.parent = current_cell
             current_cell.children.append(child_cell)
@@ -102,7 +105,8 @@ class HierarchicalPartition:
         for leaf in leaves:
             current = leaf
             while current.depth < max_depth:
-                child = PartitionCell(self._cell_counter, current.point_indices, depth=current.depth + 1)
+                # 4. FIX: A padded leaf represents the exact same spatial box as its parent
+                child = PartitionCell(self._cell_counter, current.point_indices, depth=current.depth + 1, bbox=current.bbox)
                 self._cell_counter += 1
                 child.parent = current
                 current.children.append(child)
