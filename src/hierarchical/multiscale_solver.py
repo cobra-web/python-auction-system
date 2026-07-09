@@ -3,7 +3,6 @@ from src.core.ot_auction import AuctionOT, TOL
 from src.utils.eps_scaling import EpsScalingManager
 from src.hierarchical.consistency import ConsistencyChecker
 
-
 class HierarchicalMultiscaleSolver:
     
     def __init__(self, tree_X, tree_Y, cost_matrix, mu_X, mu_Y):
@@ -136,20 +135,20 @@ class HierarchicalMultiscaleSolver:
 
                 checker.c_hat_cache.clear()
 
-                # --- CRITICAL FIX: The Supremum Bound ---
-                # Find the maximum (worst) reduced cost the source accepted in the sparse graph.
-                # If a missing edge is cheaper than the WORST edge x is currently using, we must add it.
+                # --- FINAL FIX: STRICT MINIMUM + CONTINUOUS SLACK BUFFER ---
                 alpha = np.full(len(mu_X_fine), np.inf, dtype=float)
                 for x in range(len(mu_X_fine)):
                     valid_ys = [y for (x_prime, y) in N_guess if x_prime == x]
                     if len(valid_ys) > 0:
-                        alpha[x] = np.max(C_fine[x, valid_ys] - unscaled_beta[valid_ys])
+                        # Revert to Schmitzer's mathematically correct tight minimum
+                        alpha[x] = np.min(C_fine[x, valid_ys] - unscaled_beta[valid_ys])
 
+                # Because continuous float mass splitting accumulates error faster than discrete OT, 
+                # we apply a robust search radius: 5x the scaled epsilon + a structural percentage floor.
                 actual_eps = max(hybrid_manager.target_eps, 1e-4)
+                robust_buffer = (actual_eps * scale * 5.0) + (1e-3 * scale)
                 
-                # Add a generous numerical buffer proportional to the matrix scale to absorb 
-                # dual fluctuations from the aggressive 1/5 epsilon scaling.
-                alpha_prime = alpha + (actual_eps * scale) + (1e-3 * scale)
+                alpha_prime = alpha + robust_buffer
 
                 # Run consistency check 
                 prev_len = len(checker.N_set)
