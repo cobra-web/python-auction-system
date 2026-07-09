@@ -1,7 +1,24 @@
 import numpy as np
 
 class EpsScalingManager:
-    
+
+    @staticmethod
+    def compute_target_eps_absolute(cost_matrix, target_eps=None):
+        """
+        Pure function version of the target_eps_absolute calculation below.
+        Depends only on the cost matrix and the requested target_eps -- NOT
+        on allowed_edges, mu_X/mu_Y, or any solver state -- so it can be
+        computed for a generation's cost matrix before a neighborhood has
+        been chosen, e.g. to certify a sparse neighborhood before ever
+        constructing/solving with it.
+        """
+        C = np.asarray(cost_matrix, dtype=float)
+        max_c = np.max(np.abs(C))
+        if max_c == 0:
+            max_c = 1.0
+        target_eps_normalized = 1e-4 if target_eps is None else target_eps / max_c
+        return target_eps_normalized * max_c
+
     def __init__(self, solver_class, cost_matrix, theta=5.0, target_eps=None, initial_beta=None, **solver_kwargs):
         self.solver_class = solver_class
         self.C_original = np.array(cost_matrix, dtype=float) 
@@ -16,12 +33,8 @@ class EpsScalingManager:
         
         self.initial_beta_normalized = initial_beta / self.max_c if initial_beta is not None else None
         
-        if target_eps is None:
-            self.target_eps_normalized = 1e-4
-        else:
-            self.target_eps_normalized = target_eps / self.max_c
-            
-        self.target_eps_absolute = self.target_eps_normalized * self.max_c
+        self.target_eps_absolute = self.compute_target_eps_absolute(self.C_original, target_eps)
+        self.target_eps_normalized = self.target_eps_absolute / self.max_c
         
         # WARM START FIX: Give the solver a short 2-phase adjustment window 
         # to adapt to newly added edges without resetting all the way to 0.5.
