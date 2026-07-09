@@ -1,4 +1,3 @@
-# src/hierarchical/consistency.py
 import numpy as np
 
 class ConsistencyChecker:
@@ -16,7 +15,6 @@ class ConsistencyChecker:
         cell_to_idx_X = {cell: idx for idx, cell in enumerate(self.tree_X.generations[target_gen])}
         cell_to_idx_Y = {cell: idx for idx, cell in enumerate(self.tree_Y.generations[target_gen])}
 
-        # Extend α' upward: α'̂(a) = max over descendants of α'(leaf)
         for gen in range(target_gen, self.tree_X.g):
             for cell in self.tree_X.generations[gen]:
                 if gen == target_gen:
@@ -28,7 +26,6 @@ class ConsistencyChecker:
                             self.alpha_prime_hat[child.id] for child in cell.children
                         )
 
-        # Extend β upward: β̂(b) = max over descendants of β(leaf)
         for gen in range(target_gen, self.tree_Y.g):
             for cell in self.tree_Y.generations[gen]:
                 if gen == target_gen:
@@ -50,9 +47,6 @@ class ConsistencyChecker:
             return self.c_hat_cache[cache_key]
 
         if not cell_a.children and not cell_b.children:
-            # Both are true leaves in the tree (regardless of nominal generation
-            # number -- a branch may stop splitting before generation 0 and get
-            # replicated downward). Use their actual point sets directly.
             idx_a = cell_a.point_indices
             idx_b = cell_b.point_indices
             val = np.min(self.C[np.ix_(idx_a, idx_b)])
@@ -74,10 +68,6 @@ class ConsistencyChecker:
         return val
 
     def run_consistency_check(self, alpha_prime, beta, target_gen, start_gen=None):
-        """
-        Run consistency check (SS13 Section 4.1-4.2):
-        Find pairs (x,y) at target_gen where slackness is violated.
-        """
         self._compute_extensions(alpha_prime, beta, target_gen)
 
         if start_gen is None:
@@ -105,12 +95,9 @@ class ConsistencyChecker:
         a_prime_hat = self.alpha_prime_hat[cell_a.id]
         b_hat = self.beta_hat[cell_b.id]
 
-        # === PRUNING RULE: If cost exceeds price at coarse level, skip entire subtree ===
         if c_hat_val - b_hat >= a_prime_hat:
             return []
 
-        # === BASE CASE: reached target generation, OR this branch stopped
-        # splitting earlier (childless) and can't be refined any further ===
         cell_a_is_terminal = (cell_a.generation == target_gen) or (not cell_a.children)
         cell_b_is_terminal = (cell_b.generation == target_gen) or (not cell_b.children)
 
@@ -119,15 +106,12 @@ class ConsistencyChecker:
             y = self._cell_to_idx_Y[cell_b]
             found_edges = []
 
-            # Add edge if it's not already in N and violates complementary slackness
             if (x, y) not in self.N_set:
-                # CRITICAL FIX: Check if ĉ - β < α' (violation requiring edge)
                 if c_hat_val - beta[y] < alpha_prime[x]:
                     found_edges.append((x, y))
 
             return found_edges
 
-        # === RECURSIVE CASE: Expand to children ===
         found_edges = []
         if cell_a.children and cell_b.children:
             for child_a in cell_a.children:
