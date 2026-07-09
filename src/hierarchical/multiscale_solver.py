@@ -3,6 +3,7 @@ from src.core.ot_auction import AuctionOT, TOL
 from src.utils.eps_scaling import EpsScalingManager
 from src.hierarchical.consistency import ConsistencyChecker
 
+
 class HierarchicalMultiscaleSolver:
     
     def __init__(self, tree_X, tree_Y, cost_matrix, mu_X, mu_Y):
@@ -56,7 +57,7 @@ class HierarchicalMultiscaleSolver:
         
         for i in range(len(cells_X_coarse)):
             for j in range(len(cells_Y_coarse)):
-                if coarse_mu[i, j] > 1e-9:
+                if coarse_mu[i, j] > TOL:
                     parent_a = cells_X_coarse[i]
                     parent_b = cells_Y_coarse[j]
                     
@@ -130,24 +131,27 @@ class HierarchicalMultiscaleSolver:
                 # Keep normalized beta for next iterations in the Auction solver
                 current_beta_for_level = final_beta.copy()
                 
-                # --- CRITICAL FIX: UNSCALE DUALS ---
-                # EpsScalingManager returns duals mapped to a [0, 1] normalized cost matrix.
-                # We must multiply them by the scale to match the raw C_fine used in ConsistencyChecker.
+                # UNSCALE DUALS
                 scale = hybrid_manager.scale
                 unscaled_beta = final_beta * scale
                 unscaled_target_eps = hybrid_manager.target_eps * scale
 
                 checker.c_hat_cache.clear()
 
-                # Extract dual certificates using UNSCALED values
+                # --- CRITICAL FIX: Extract alpha ONLY from active edges ---
                 alpha = np.full(len(mu_X_fine), np.inf, dtype=float)
                 for x in range(len(mu_X_fine)):
-                    valid_ys = [y for (x_prime, y) in N_guess if x_prime == x]
-                    if len(valid_ys) > 0:
-                        alpha[x] = np.min(C_fine[x, valid_ys] - unscaled_beta[valid_ys])
+                    # Get targets where x ACTUALLY successfully placed mass
+                    active_ys = np.where(current_mu[x] > TOL)[0]
+                    
+                    if len(active_ys) > 0:
+                        alpha[x] = np.max(C_fine[x, active_ys] - unscaled_beta[active_ys])
+                    else:
+                        # Fallback (safety net)
+                        valid_ys = [y for (x_prime, y) in N_guess if x_prime == x]
+                        if len(valid_ys) > 0:
+                            alpha[x] = np.min(C_fine[x, valid_ys] - unscaled_beta[valid_ys])
 
-                # Because ConsistencyChecker._c_hat already computes the EXACT lower-bound cost 
-                # (np.min), we do NOT need the geometric max_cell_slack heuristic.
                 alpha_prime = alpha + unscaled_target_eps + 1e-9
 
                 # Run consistency check using UNSCALED beta
@@ -169,7 +173,7 @@ class HierarchicalMultiscaleSolver:
                     break
 
             self.last_N_guess = N_guess
-            current_beta = final_beta  # Pass the normalized beta forward correctly
+            current_beta = final_beta  
             prev_max_c = fine_max_c
 
         print("\nMultiscale optimization complete. Reconstructing solution at finest scale...")
