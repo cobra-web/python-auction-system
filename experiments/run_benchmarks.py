@@ -1,6 +1,7 @@
 import time
 import os
 import sys
+import ot
 import numpy as np
 from src.utils.cost_functions import squared_euclidean
 from src.utils.eps_scaling import EpsScalingManager
@@ -33,8 +34,8 @@ def run_comprehensive_benchmarks():
     print("BACHELOR THESIS: OPTIMAL TRANSPORT SOLVER BENCHMARK (WITH PROFESSOR DIAGNOSTICS)")
     print("=============================================================================================================\n")
     
-    # Table Header
-    header = f"| {'N':<4} | {'Method':<15} | {'Time (s)':<10} | {'Rep. Cost':<10} | {'Man. Cost':<10} | {'Mass (Soll)':<15} | {'Pairs (Max)':<12} | {'Primal Match':<12} |"
+    # Table Header (Replaced Primal Match with Gap %)
+    header = f"| {'N':<4} | {'Method':<15} | {'Time (s)':<10} | {'Rep. Cost':<10} | {'Man. Cost':<10} | {'Mass (Soll)':<15} | {'Pairs (Max)':<12} | {'Gap (%)':<12} |"
     separator = "-" * len(header)
     
     print(separator)
@@ -44,12 +45,13 @@ def run_comprehensive_benchmarks():
     scales = [16, 32, 64, 128, 512]
     
     for N in scales:
-        np.random.seed(42)
+        np.random.seed(50)
         X_pts = np.random.rand(N, 2)
         Y_pts = np.random.rand(N, 2)
         
-        mu_X = np.random.randint(1, 6, size=N)
-        mu_Y = np.random.randint(1, 6, size=N)
+        # ot.emd2 requires float types for masses
+        mu_X = np.random.randint(1, 6, size=N).astype(float)
+        mu_Y = np.random.randint(1, 6, size=N).astype(float)
         
         diff = np.sum(mu_X) - np.sum(mu_Y)
         if diff > 0:
@@ -64,6 +66,13 @@ def run_comprehensive_benchmarks():
             for j in range(N):
                 C[i, j] = np.sum((X_pts[i] - Y_pts[j])**2)
                 
+        # --- NEW: EXACT COST CALCULATION ---
+        try:
+            exact_cost = ot.emd2(mu_X, mu_Y, C)
+        except Exception as e:
+            exact_cost = float('inf')  # Fallback if POT fails
+            print(f"Warning: Exact cost failed to compute for N={N}")
+
         try:
             t0 = time.perf_counter()
             with SilencePrints():
@@ -79,7 +88,6 @@ def run_comprehensive_benchmarks():
             print(f"| {N:<4} | {'LAP Reference':<15} | {t_lap:<10.5f} | {'-':<10} | {manual_lap_cost:<10.4f} | {'-':<15} | {'-':<12} | {'-':<12} |")
         except Exception as e:
             print(f"| {N:<4} | {'LAP Reference':<15} | {'FAIL':<10} | {'-':<10} | {'-':<10} | {'-':<15} | {'-':<12} | {'-':<12} |")
-            import traceback; traceback.print_exc()
             
         dense_mu = None
         try:
@@ -98,7 +106,12 @@ def run_comprehensive_benchmarks():
             actual_dense_mass = np.sum(dense_mu)
             active_dense_pairs = np.sum(dense_mu > 1e-5)
             
-            print(f"| {N:<4} | {'DENSE OT':<15} | {t_dense:<10.5f} | {dense_reported_cost:<10.4f} | {manual_dense_cost:<10.4f} | {f'{actual_dense_mass:.2f} ({total_problem_mass})':<15} | {f'{active_dense_pairs} ({2*N-1})':<12} | {'-':<12} |")
+            # --- NEW: DENSE GAP AND MARGINAL ASSERTIONS ---
+            dense_gap = ((manual_dense_cost - exact_cost) / exact_cost) * 100
+            assert np.allclose(dense_mu.sum(axis=1), mu_X, atol=1e-5), f"Dense: Source marginal violated at N={N}!"
+            assert np.allclose(dense_mu.sum(axis=0), mu_Y, atol=1e-5), f"Dense: Target marginal violated at N={N}!"
+            
+            print(f"| {N:<4} | {'DENSE OT':<15} | {t_dense:<10.5f} | {dense_reported_cost:<10.4f} | {manual_dense_cost:<10.4f} | {f'{actual_dense_mass:.2f} ({total_problem_mass:.0f})':<15} | {f'{active_dense_pairs} ({2*N-1})':<12} | {f'{dense_gap:>8.3f}%':<12} |")
         except Exception as e:
             print(f"| {N:<4} | {'DENSE OT':<15} | {'FAIL':<10} | {'-':<10} | {'-':<10} | {'-':<15} | {'-':<12} | {'-':<12} |")
             import traceback; traceback.print_exc()
@@ -120,9 +133,12 @@ def run_comprehensive_benchmarks():
             actual_hier_mass = np.sum(hier_mu)
             active_hier_pairs = np.sum(hier_mu > 1e-5)
             
-            matrices_identical = np.allclose(dense_mu, hier_mu, atol=1e-3) if dense_mu is not None else False
+            # --- NEW: HIERARCHICAL GAP AND MARGINAL ASSERTIONS ---
+            hier_gap = ((manual_hier_cost - exact_cost) / exact_cost) * 100
+            assert np.allclose(hier_mu.sum(axis=1), mu_X, atol=1e-5), f"Hierarchical: Source marginal violated at N={N}!"
+            assert np.allclose(hier_mu.sum(axis=0), mu_Y, atol=1e-5), f"Hierarchical: Target marginal violated at N={N}!"
             
-            print(f"| {N:<4} | {'HIERARCH. OT':<15} | {t_hier:<10.5f} | {'-':<10} | {manual_hier_cost:<10.4f} | {f'{actual_hier_mass:.2f} ({total_problem_mass})':<15} | {f'{active_hier_pairs} ({2*N-1})':<12} | {str(matrices_identical):<12} |")
+            print(f"| {N:<4} | {'HIERARCH. OT':<15} | {t_hier:<10.5f} | {'-':<10} | {manual_hier_cost:<10.4f} | {f'{actual_hier_mass:.2f} ({total_problem_mass:.0f})':<15} | {f'{active_hier_pairs} ({2*N-1})':<12} | {f'{hier_gap:>8.3f}%':<12} |")
             
         except Exception as e:
             print(f"| {N:<4} | {'HIERARCH. OT':<15} | {'FAIL':<10} | {'-':<10} | {'-':<10} | {'-':<15} | {'-':<12} | {'-':<12} |")
