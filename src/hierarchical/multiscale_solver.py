@@ -10,41 +10,32 @@ class HierarchicalMultiscaleSolver:
         self.tree_Y = tree_Y
         self.C_raw = np.array(cost_matrix, dtype=float)
         
-        # Globale Kostenskalierung synchronisieren (identisch zu AuctionOT)
         self.max_c = np.max(self.C_raw)
         self.C = self.C_raw / (self.max_c if self.max_c > 0 else 1.0)
         
         self.mu_X = np.array(mu_X, dtype=float)
         self.mu_Y = np.array(mu_Y, dtype=float)
 
-        # --- FIX ISSUE 1: AUTOMATISCHES TREE PADDING ---
         self._align_tree_depths()
         self.g = self.tree_X.g
         
         self.last_N_guess = []
 
     def _align_tree_depths(self):
-        """
-        Erzwingt exakt gleiche Tiefen für beide Bäume gemäß Schmitzers Theorie,
-        indem der flachere Baum durch Vererbung der Blätter nach unten aufgefüllt wird.
-        """
         max_g = max(self.tree_X.g, self.tree_Y.g)
         
         for tree in [self.tree_X, self.tree_Y]:
             while tree.g < max_g:
                 current_depth = tree.g
-                # Nimm die letzte Generation (Blätter) und kopiere sie in die neue Ebene
                 leaf_generation = tree.generations[-1]
                 next_generation = []
                 
                 for cell in leaf_generation:
-                    # Erzeuge ein virtuelles Kind, das die Eigenschaften des Elternelements erbt
                     virtual_child = copy.copy(cell)
                     virtual_child.generation = current_depth
                     virtual_child.parent = cell
                     virtual_child.children = []
                     
-                    # Verknüpfung im Baum verankern
                     cell.children = [virtual_child]
                     next_generation.append(virtual_child)
                 
@@ -67,7 +58,6 @@ class HierarchicalMultiscaleSolver:
         for j, cell_b in enumerate(cells_Y):
             mu_Y_hat[j] = np.sum(self.mu_Y[cell_b.point_indices])
 
-        # WICHTIG: C_hat wird auf der normierten [0, 1] Matrix C berechnet!
         C_hat = np.zeros((num_a, num_b))
         for i, cell_a in enumerate(cells_X):
             for j, cell_b in enumerate(cells_Y):
@@ -108,16 +98,15 @@ class HierarchicalMultiscaleSolver:
     def solve(self):
         coarsest_gen = self.g - 1
         
-        # Checker arbeitet auf der normierten Matrix C für mathematische Konsistenz
         checker = ConsistencyChecker(self.tree_X, self.tree_Y, self.C, initial_sparse_N=[])
 
         C_fine, mu_X_fine, mu_Y_fine = self._build_coarsened_problem(coarsest_gen)
 
-        # Grobes Problem lösen
-        manager = EpsScalingManager(AuctionOT, C_fine, mu_X=mu_X_fine, mu_Y=mu_Y_fine)
+        manager = EpsScalingManager(
+            AuctionOT, C_fine, mu_X=mu_X_fine, mu_Y=mu_Y_fine, normalize=False
+        )
         current_mu, _, _, final_beta = manager.solve()
 
-        # Kaskade nach unten durch den Baum
         for gen in range(coarsest_gen - 1, -1, -1):
             N_guess = self._induce_sparse_neighborhood(current_mu, gen + 1)
             C_fine, mu_X_fine, mu_Y_fine = self._build_coarsened_problem(gen)
@@ -130,25 +119,22 @@ class HierarchicalMultiscaleSolver:
 
             current_beta_for_level = np.zeros(len(cells_Y_fine), dtype=float)
 
-            # Warm-Start Dual-Interpolation
             for i, fine_cell in enumerate(cells_Y_fine):
                 parent_cell = fine_cell.parent
                 if parent_cell in cell_to_idx_Y_coarse:
                     parent_idx = cell_to_idx_Y_coarse[parent_cell]
                     current_beta_for_level[i] = final_beta[parent_idx]
 
-            # Schmitzer's Erweiterungsschleife (Section 4.2)
             while True:
-                # FIX ISSUE 2: Der Manager erzwingt das exakte e-scaling auf feinen Ebenen
                 hybrid_manager = EpsScalingManager(
                     AuctionOT, C_fine, mu_X=mu_X_fine, mu_Y=mu_Y_fine, 
                     allowed_edges=N_guess,
-                    initial_beta=current_beta_for_level
+                    initial_beta=current_beta_for_level,
+                    normalize=False
                 )
                 current_mu, total_cost, total_iters, final_beta = hybrid_manager.solve()
                 current_beta_for_level = final_beta
 
-                # Alpha-Berechnung auf der skalierten Matrix C_fine!
                 alpha = np.zeros(len(mu_X_fine))
                 for x in range(len(mu_X_fine)):
                     valid_ys = [y for (x_prime, y) in N_guess if x_prime == x]
@@ -170,13 +156,19 @@ class HierarchicalMultiscaleSolver:
 
             self.last_N_guess = N_guess
 
-        # Finaler Rekonstruktionsschritt auf die originalen Koordinaten
-        orig_idx_X = [cell.point_indices[0] for cell in self.tree_X.generations[0]]
-        orig_idx_Y = [cell.point_indices[0] for cell in self.tree_Y.generations[0]]
-
         reconstructed_mu = np.zeros_like(self.C_raw)
-        for i, orig_x in enumerate(orig_idx_X):
-            for j, orig_y in enumerate(orig_idx_Y):
-                reconstructed_mu[orig_x, orig_y] = current_mu[i, j]
+        
+        cells_X_finest = self.tree_X.generations[0]
+        cells_Y_finest = self.tree_Y.generations[0]
+        
+        for i, cell_x in enumerate(cells_X_finest):
+            for j, cell_y in enumerate(cells_Y_finest):
+                if current_mu[i, j] > 0:
+                    assert len(cell_x.point_indices) == 1, f"Cell X {i} has {len(cell_x.point_indices)} points!"
+                    assert len(cell_y.point_indices) == 1, f"Cell Y {j} has {len(cell_y.point_indices)} points!"
+                    
+                    orig_x = cell_x.point_indices[0]
+                    orig_y = cell_y.point_indices[0]
+                    reconstructed_mu[orig_x, orig_y] = current_mu[i, j]
 
         return reconstructed_mu
