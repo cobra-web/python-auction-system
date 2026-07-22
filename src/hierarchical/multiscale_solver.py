@@ -81,8 +81,8 @@ class HierarchicalMultiscaleSolver:
 
             checker.N_set = set(N_guess)
 
-            # --- DIAGNOSTIC PRINT 1: Initial Pruning ---
-            print(f"[Depth {d+1}] Initial induced edges: {len(N_guess)}")
+            # --- DIAGNOSTIC PRINT 1 (Bypassing stdout suppressors) ---
+            sys.stderr.write(f"[Depth {d+1}] Initial induced edges: {len(N_guess)}\n")
 
             cell_to_idx_Y_coarse = {cell: idx for idx, cell in enumerate(cY)}
             current_beta_for_level = np.zeros(len(fY), dtype=float)
@@ -121,8 +121,8 @@ class HierarchicalMultiscaleSolver:
                 added = len(checker.N_set) - prev_len
                 N_guess = list(checker.N_set)
                 
-                # --- DIAGNOSTIC PRINT 2: Consistency Check ---
-                print(f"  -> Loop {iteration_count}: Checker added {added} edges. Total active: {len(N_guess)}")
+                # --- DIAGNOSTIC PRINT 2 (Bypassing stdout suppressors) ---
+                sys.stderr.write(f"  -> Loop {iteration_count}: Checker added {added} edges. Total active: {len(N_guess)}\n")
                 iteration_count += 1
 
                 if added == 0:
@@ -131,7 +131,7 @@ class HierarchicalMultiscaleSolver:
             self.last_N_guess = N_guess
             
             # Setup coarse variables for the next level down
-            cX, cY = fX, fY
+            cX, cY = fX
 
         # Reconstruction to sparse assignment list
         sparse_assignments = []
