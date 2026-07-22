@@ -76,6 +76,19 @@ def run_comprehensive_benchmarks():
             except Exception:
                 continue
 
+            # Build trees for hierarchical solver
+            tree_X, tree_Y = build_matched_trees(X_pts, Y_pts)
+
+            # =========================================================
+            # INSERT GLOBAL COST SCALE & PARAMS HERE
+            # =========================================================
+            gmin = np.minimum(X_pts.min(axis=0), Y_pts.min(axis=0))
+            gmax = np.maximum(X_pts.max(axis=0), Y_pts.max(axis=0))
+            GLOBAL_MAX_C = float(np.sum((gmax - gmin) ** 2)) or 1.0
+
+            tight_target = 0.5 / (N + 1)
+            tight_min = 1e-5
+            
             # ---------------------------------------------------------
             # DENSE OT (Forced to Raw Units)
             # ---------------------------------------------------------
