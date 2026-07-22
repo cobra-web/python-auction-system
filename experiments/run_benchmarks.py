@@ -41,7 +41,7 @@ def run_comprehensive_benchmarks():
     print(header)
     print(separator)
     
-    scales = [16, 32, 64, 128, 512]
+    scales = [16, 32, 64, 128, 1024]
     
     for N in scales:
         np.random.seed(42)
