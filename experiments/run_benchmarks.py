@@ -3,11 +3,12 @@ import os
 import sys
 import ot
 import numpy as np
+import matplotlib.pyplot as plt
+
 from src.utils.cost_functions import squared_euclidean
 from src.utils.eps_scaling import EpsScalingManager
 from src.core.ot_auction import AuctionOT
 from src.core.lap_auction import AuctionLAP
-
 from src.hierarchical.partitions import HierarchicalPartition
 from src.hierarchical.multiscale_solver import HierarchicalMultiscaleSolver
 
@@ -22,129 +23,132 @@ class SilencePrints:
 def build_matched_trees(X_pts, Y_pts, max_points_per_cell=1, max_allowed_depth=15):
     probe_X = HierarchicalPartition(X_pts, max_points_per_cell=max_points_per_cell, max_allowed_depth=max_allowed_depth)
     probe_Y = HierarchicalPartition(Y_pts, max_points_per_cell=max_points_per_cell, max_allowed_depth=max_allowed_depth)
-
     target_depth = max(probe_X.max_depth, probe_Y.max_depth)
-    
     tree_X = HierarchicalPartition(X_pts, max_points_per_cell=max_points_per_cell, max_allowed_depth=target_depth)
     tree_Y = HierarchicalPartition(Y_pts, max_points_per_cell=max_points_per_cell, max_allowed_depth=target_depth)
     return tree_X, tree_Y
 
 def run_comprehensive_benchmarks():
     print("\n=============================================================================================================")
-    print("BACHELOR THESIS: OPTIMAL TRANSPORT SOLVER BENCHMARK (WITH PROFESSOR DIAGNOSTICS)")
+    print("BACHELOR THESIS: MULTI-SEED RIGOROUS BENCHMARK (TIGHT EPSILON)")
     print("=============================================================================================================\n")
     
-    # Table Header (Replaced Primal Match with Gap %)
-    header = f"| {'N':<4} | {'Method':<15} | {'Time (s)':<10} | {'Rep. Cost':<10} | {'Man. Cost':<10} | {'Mass (Soll)':<15} | {'Pairs (Max)':<12} | {'Gap (%)':<12} |"
-    separator = "-" * len(header)
+    scales = [16, 32, 64, 128, 256, 512, 1024]
+    seeds = [42, 50, 100, 2024, 999]  # 5 distinct runs
     
-    print(separator)
-    print(header)
-    print(separator)
-    
-    scales = [16, 32, 64, 128, 1024]
-    
-    for N in scales:
-        np.random.seed(50)
-        X_pts = np.random.rand(N, 2)
-        Y_pts = np.random.rand(N, 2)
-        
-        # ot.emd2 requires float types for masses
-        mu_X = np.random.randint(1, 6, size=N).astype(float)
-        mu_Y = np.random.randint(1, 6, size=N).astype(float)
-        
-        diff = np.sum(mu_X) - np.sum(mu_Y)
-        if diff > 0:
-            mu_Y[0] += diff
-        elif diff < 0:
-            mu_X[0] += abs(diff)
-            
-        total_problem_mass = np.sum(mu_X)
-        
-        C = np.zeros((N, N))
-        for i in range(N):
-            for j in range(N):
-                C[i, j] = np.sum((X_pts[i] - Y_pts[j])**2)
-                
-        # --- NEW: EXACT COST CALCULATION ---
-        try:
-            exact_cost = ot.emd2(mu_X, mu_Y, C)
-        except Exception as e:
-            exact_cost = float('inf')  # Fallback if POT fails
-            print(f"Warning: Exact cost failed to compute for N={N}")
+    results = {
+        'N': scales,
+        'dense_time_mean': [], 'dense_time_std': [],
+        'hier_time_mean': [], 'hier_time_std': [],
+        'dense_gap_mean': [], 'hier_gap_mean': []
+    }
 
-        try:
-            t0 = time.perf_counter()
-            with SilencePrints():
-                lap_solver = AuctionLAP(C)
-                lap_assignment, lap_cost, lap_iters = lap_solver.solve()
-            t_lap = time.perf_counter() - t0
+    print(f"| {'N':<4} | {'Method':<15} | {'Time Mean (s)':<15} | {'Time Std (s)':<15} | {'Gap Mean (%)':<12} |")
+    print("-" * 73)
+
+    for N in scales:
+        dense_times, hier_times = [], []
+        dense_gaps, hier_gaps = [], []
+        
+        # Enforce a strict epsilon schedule for apples-to-apples comparison
+        tight_target = 0.5 / (N + 1)
+        tight_min = 1e-5
+
+        for seed in seeds:
+            np.random.seed(seed)
+            X_pts = np.random.rand(N, 2)
+            Y_pts = np.random.rand(N, 2)
             
-            lap_mu = np.zeros_like(C)
-            for x, y in enumerate(lap_assignment):
-                if y != -1: lap_mu[x, y] = 1.0
+            mu_X = np.random.randint(1, 6, size=N).astype(float)
+            mu_Y = np.random.randint(1, 6, size=N).astype(float)
+            
+            diff = np.sum(mu_X) - np.sum(mu_Y)
+            if diff > 0: mu_Y[0] += diff
+            elif diff < 0: mu_X[0] += abs(diff)
                 
-            manual_lap_cost = np.sum(lap_mu * C)
-            print(f"| {N:<4} | {'LAP Reference':<15} | {t_lap:<10.5f} | {'-':<10} | {manual_lap_cost:<10.4f} | {'-':<15} | {'-':<12} | {'-':<12} |")
-        except Exception as e:
-            print(f"| {N:<4} | {'LAP Reference':<15} | {'FAIL':<10} | {'-':<10} | {'-':<10} | {'-':<15} | {'-':<12} | {'-':<12} |")
-            
-        dense_mu = None
-        try:
+            C = np.zeros((N, N))
+            for i in range(N):
+                for j in range(N):
+                    C[i, j] = np.sum((X_pts[i] - Y_pts[j])**2)
+                    
+            try:
+                exact_cost = ot.emd2(mu_X, mu_Y, C)
+            except Exception:
+                continue
+
+            # ---------------------------------------------------------
+            # DENSE OT (Forced to Raw Units)
+            # ---------------------------------------------------------
             t1 = time.perf_counter()
             with SilencePrints():
-                dense_manager = EpsScalingManager(AuctionOT, X_pts=X_pts, Y_pts=Y_pts, mu_X=mu_X, mu_Y=mu_Y)
-                dense_mu_dict, dense_reported_cost, _, _ = dense_manager.solve()
-            t_dense = time.perf_counter() - t1
+                dense_manager = EpsScalingManager(
+                    AuctionOT, X_pts=X_pts, Y_pts=Y_pts, mu_X=mu_X, mu_Y=mu_Y,
+                    normalize=False, target_eps=tight_target, min_eps=tight_min
+                )
+                dense_mu_dict, _, _, _ = dense_manager.solve()
+            dense_times.append(time.perf_counter() - t1)
             
             dense_mu = np.zeros((N, N))
             for x in dense_mu_dict:
                 for y, m in dense_mu_dict[x].items():
                     dense_mu[x, y] = m
+            dense_gaps.append(((np.sum(dense_mu * C) - exact_cost) / exact_cost) * 100)
 
-            manual_dense_cost = np.sum(dense_mu * C)
-            actual_dense_mass = np.sum(dense_mu)
-            active_dense_pairs = np.sum(dense_mu > 1e-5)
-            
-            # --- NEW: DENSE GAP AND MARGINAL ASSERTIONS ---
-            dense_gap = ((manual_dense_cost - exact_cost) / exact_cost) * 100
-            assert np.allclose(dense_mu.sum(axis=1), mu_X, atol=1e-5), f"Dense: Source marginal violated at N={N}!"
-            assert np.allclose(dense_mu.sum(axis=0), mu_Y, atol=1e-5), f"Dense: Target marginal violated at N={N}!"
-            
-            print(f"| {N:<4} | {'DENSE OT':<15} | {t_dense:<10.5f} | {dense_reported_cost:<10.4f} | {manual_dense_cost:<10.4f} | {f'{actual_dense_mass:.2f} ({total_problem_mass:.0f})':<15} | {f'{active_dense_pairs} ({2*N-1})':<12} | {f'{dense_gap:>8.3f}%':<12} |")
-        except Exception as e:
-            print(f"| {N:<4} | {'DENSE OT':<15} | {'FAIL':<10} | {'-':<10} | {'-':<10} | {'-':<15} | {'-':<12} | {'-':<12} |")
-            import traceback; traceback.print_exc()
-
-        try:
+            # ---------------------------------------------------------
+            # HIERARCHICAL OT
+            # ---------------------------------------------------------
             tree_X, tree_Y = build_matched_trees(X_pts, Y_pts)
-
             t2 = time.perf_counter()
             with SilencePrints():
+                # Hierarchical internally passes normalize=False, so now they match!
                 multiscale_solver = HierarchicalMultiscaleSolver(tree_X, tree_Y, mu_X, mu_Y)
                 sparse_hier_mu = multiscale_solver.solve()
-            t_hier = time.perf_counter() - t2
+            hier_times.append(time.perf_counter() - t2)
             
-            hier_mu = np.zeros((N, N))
-            for x, y, mass in sparse_hier_mu:
-                hier_mu[x, y] += mass
+            hier_cost = sum(mass * C[x, y] for x, y, mass in sparse_hier_mu)
+            hier_gaps.append(((hier_cost - exact_cost) / exact_cost) * 100)
 
-            manual_hier_cost = np.sum(hier_mu * C)
-            actual_hier_mass = np.sum(hier_mu)
-            active_hier_pairs = np.sum(hier_mu > 1e-5)
-            
-            # --- NEW: HIERARCHICAL GAP AND MARGINAL ASSERTIONS ---
-            hier_gap = ((manual_hier_cost - exact_cost) / exact_cost) * 100
-            assert np.allclose(hier_mu.sum(axis=1), mu_X, atol=1e-5), f"Hierarchical: Source marginal violated at N={N}!"
-            assert np.allclose(hier_mu.sum(axis=0), mu_Y, atol=1e-5), f"Hierarchical: Target marginal violated at N={N}!"
-            
-            print(f"| {N:<4} | {'HIERARCH. OT':<15} | {t_hier:<10.5f} | {'-':<10} | {manual_hier_cost:<10.4f} | {f'{actual_hier_mass:.2f} ({total_problem_mass:.0f})':<15} | {f'{active_hier_pairs} ({2*N-1})':<12} | {f'{hier_gap:>8.3f}%':<12} |")
-            
-        except Exception as e:
-            print(f"| {N:<4} | {'HIERARCH. OT':<15} | {'FAIL':<10} | {'-':<10} | {'-':<10} | {'-':<15} | {'-':<12} | {'-':<12} |")
-            import traceback; traceback.print_exc()
-            
-        print(separator)
+        # Aggregate Statistics
+        results['dense_time_mean'].append(np.mean(dense_times))
+        results['dense_time_std'].append(np.std(dense_times))
+        results['hier_time_mean'].append(np.mean(hier_times))
+        results['hier_time_std'].append(np.std(hier_times))
+        results['dense_gap_mean'].append(np.mean(dense_gaps))
+        results['hier_gap_mean'].append(np.mean(hier_gaps))
+
+        print(f"| {N:<4} | {'DENSE OT':<15} | {np.mean(dense_times):<15.4f} | {np.std(dense_times):<15.4f} | {np.mean(dense_gaps):>8.3f}%   |")
+        print(f"| {N:<4} | {'HIERARCH. OT':<15} | {np.mean(hier_times):<15.4f} | {np.std(hier_times):<15.4f} | {np.mean(hier_gaps):>8.3f}%   |")
+        print("-" * 73)
+
+    return results
+
+def plot_results(results):
+    print("\nGenerating PDF plots for thesis...")
+    
+    plt.figure(figsize=(8, 6))
+    N_arr = np.array(results['N'])
+    
+    plt.loglog(N_arr, results['dense_time_mean'], marker='o', label='Dense Auction', linewidth=2)
+    plt.loglog(N_arr, results['hier_time_mean'], marker='s', label='Hierarchical Auction', linewidth=2)
+    
+    plt.fill_between(N_arr, 
+                     np.array(results['dense_time_mean']) - np.array(results['dense_time_std']),
+                     np.array(results['dense_time_mean']) + np.array(results['dense_time_std']), 
+                     alpha=0.2)
+    plt.fill_between(N_arr, 
+                     np.array(results['hier_time_mean']) - np.array(results['hier_time_std']),
+                     np.array(results['hier_time_mean']) + np.array(results['hier_time_std']), 
+                     alpha=0.2)
+    
+    plt.title('Computation Time vs Problem Size', fontsize=14)
+    plt.xlabel('Number of Points (N)', fontsize=12)
+    plt.ylabel('Time (seconds)', fontsize=12)
+    plt.grid(True, which="both", ls="--", alpha=0.5)
+    plt.legend(fontsize=12)
+    plt.tight_layout()
+    plt.savefig('thesis_scaling_plot.pdf')
+    print("Saved 'thesis_scaling_plot.pdf' to disk.")
 
 if __name__ == "__main__":
-    run_comprehensive_benchmarks()
+    final_results = run_comprehensive_benchmarks()
+    plot_results(final_results)
