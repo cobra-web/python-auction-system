@@ -5,56 +5,21 @@ TOL = 1e-7
 
 class AuctionOT:
     def __init__(self, X_pts, Y_pts, mu_X, mu_Y, epsilon=None,
-                 allowed_edges=None, initial_beta=None, normalize=True):
-        self.X_pts = np.array(X_pts, dtype=float)
-        self.Y_pts = np.array(Y_pts, dtype=float)
-        self.N_X = len(self.X_pts)
-        self.N_Y = len(self.Y_pts)
+             allowed_edges=None, initial_beta=None, normalize=True, max_c=None):
+    self.X_pts = np.array(X_pts, dtype=float)
+    self.Y_pts = np.array(Y_pts, dtype=float)
+    self.N_X = len(self.X_pts)
+    self.N_Y = len(self.Y_pts)
 
-        if normalize:
-            min_X, max_X = np.min(self.X_pts, axis=0), np.max(self.X_pts, axis=0)
-            min_Y, max_Y = np.min(self.Y_pts, axis=0), np.max(self.Y_pts, axis=0)
-            max_dist_sq = np.sum((np.maximum(max_X, max_Y) - np.minimum(min_X, min_Y))**2)
-            self.max_c = max_dist_sq if max_dist_sq > 0 else 1.0
-        else:
-            self.max_c = 1.0
-
-        self.mu_X = np.array(mu_X, dtype=float)
-        self.mu_Y = np.array(mu_Y, dtype=float)
-        self.epsilon = float(epsilon) if epsilon is not None else 1e-3
-        
-        self.assigned_Y = np.zeros(self.N_Y, dtype=float)
-        self.unassigned_X = np.copy(self.mu_X)
-        self.beta_diamond = np.array(initial_beta, dtype=float) if initial_beta is not None else np.zeros(self.N_Y, dtype=float)
-
-        # ---------------------------------------------------------
-        # UNCONDITIONAL OWNERSHIP TRACKING (For both Dense and Sparse)
-        # ---------------------------------------------------------
-        self.owners = [set() for _ in range(self.N_Y)]
-
-        # ---------------------------------------------------------
-        # HYBRID SPARSE STRUCTURES FOR MU AND BETA_TILDE
-        # ---------------------------------------------------------
-        if allowed_edges is not None:
-            self.is_sparse = True
-            nbrs = [[] for _ in range(self.N_X)]
-            for edge in allowed_edges:
-                x, y = int(edge[0]), int(edge[1])
-                nbrs[x].append(y)
-            
-            self.neighbors = [np.array(sorted(set(v)), dtype=int) for v in nbrs]
-            
-            # Parallel arrays: indices match the indices in self.neighbors
-            self.mu_arrs = [np.zeros(len(n), dtype=float) for n in self.neighbors]
-            self.beta_tilde_arrs = [np.zeros(len(n), dtype=float) for n in self.neighbors]
-            
-            self.col_index = [{int(y): i for i, y in enumerate(nbr)} for nbr in self.neighbors]
-            
-        else:
-            self.is_sparse = False
-            self.neighbors = None
-            self.mu_dict = defaultdict(lambda: defaultdict(float))
-            self.beta_tilde_dict = defaultdict(lambda: defaultdict(float))
+    if max_c is not None:
+        self.max_c = float(max_c)
+    elif normalize:
+        min_X, max_X = np.min(self.X_pts, axis=0), np.max(self.X_pts, axis=0)
+        min_Y, max_Y = np.min(self.Y_pts, axis=0), np.max(self.Y_pts, axis=0)
+        max_dist_sq = np.sum((np.maximum(max_X, max_Y) - np.minimum(min_X, min_Y))**2)
+        self.max_c = max_dist_sq if max_dist_sq > 0 else 1.0
+    else:
+        self.max_c = 1.0
 
     # --- HELPER FUNCTIONS FOR HYBRID LOOKUPS ---
     
