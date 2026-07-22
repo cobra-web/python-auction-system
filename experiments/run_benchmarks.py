@@ -22,10 +22,11 @@ def build_matched_trees(X_pts, Y_pts, max_points_per_cell=8, max_allowed_depth=1
     probe_X = HierarchicalPartition(X_pts, max_points_per_cell=max_points_per_cell, max_allowed_depth=max_allowed_depth)
     probe_Y = HierarchicalPartition(Y_pts, max_points_per_cell=max_points_per_cell, max_allowed_depth=max_allowed_depth)
 
-    target_g = max(probe_X.g, probe_Y.g)
+    # FIXED: Replaced .g with .max_depth
+    target_depth = max(probe_X.max_depth, probe_Y.max_depth)
     
-    tree_X = HierarchicalPartition(X_pts, max_points_per_cell=max_points_per_cell, max_allowed_depth=target_g)
-    tree_Y = HierarchicalPartition(Y_pts, max_points_per_cell=max_points_per_cell, max_allowed_depth=target_g)
+    tree_X = HierarchicalPartition(X_pts, max_points_per_cell=max_points_per_cell, max_allowed_depth=target_depth)
+    tree_Y = HierarchicalPartition(Y_pts, max_points_per_cell=max_points_per_cell, max_allowed_depth=target_depth)
     return tree_X, tree_Y
 
 def run_comprehensive_benchmarks():
@@ -55,7 +56,6 @@ def run_comprehensive_benchmarks():
             
         total_problem_mass = np.sum(mu_X)
         
-        # Original distance matrix computed ONLY for reference LAP and dense validations
         C = np.zeros((N, N))
         for i in range(N):
             for j in range(N):
@@ -65,7 +65,8 @@ def run_comprehensive_benchmarks():
             t0 = time.perf_counter()
             with SilencePrints():
                 lap_solver = AuctionLAP(C)
-                lap_assignment = lap_solver.solve()
+                # FIXED: Unpack all three return variables
+                lap_assignment, lap_cost, lap_iters = lap_solver.solve()
             t_lap = time.perf_counter() - t0
             
             lap_mu = np.zeros_like(C)
@@ -76,6 +77,7 @@ def run_comprehensive_benchmarks():
             print(f"[LAP Reference]   Zeit: {t_lap:.5f}s | Gemeldete Kosten: {manual_lap_cost:.4f}")
         except Exception as e:
             print(f"[LAP Reference]   FEHLGESCHLAGEN")
+            import traceback; traceback.print_exc()
             
         dense_mu = None
         try:
@@ -85,7 +87,6 @@ def run_comprehensive_benchmarks():
                 dense_mu_dict, dense_reported_cost, _, _ = dense_manager.solve()
             t_dense = time.perf_counter() - t1
             
-            # Reconstruct to dense array ONLY for diagnostics testing
             dense_mu = np.zeros((N, N))
             for x in dense_mu_dict:
                 for y, m in dense_mu_dict[x].items():
@@ -110,12 +111,10 @@ def run_comprehensive_benchmarks():
 
             t2 = time.perf_counter()
             with SilencePrints():
-                # Multiscale directly consumes the matched trees, NOT C
                 multiscale_solver = HierarchicalMultiscaleSolver(tree_X, tree_Y, mu_X, mu_Y)
                 sparse_hier_mu = multiscale_solver.solve()
             t_hier = time.perf_counter() - t2
             
-            # Reconstruct dense ONLY for validation checks against Professor metrics
             hier_mu = np.zeros((N, N))
             for x, y, mass in sparse_hier_mu:
                 hier_mu[x, y] += mass
