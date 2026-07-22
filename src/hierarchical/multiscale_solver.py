@@ -132,7 +132,7 @@ class HierarchicalMultiscaleSolver:
             self.last_N_guess = N_guess
             
             # Setup coarse variables for the next level down
-            cX, cY = fX
+            cX, cY = fX, fY
 
         # Reconstruction to sparse assignment list
         sparse_assignments = []
