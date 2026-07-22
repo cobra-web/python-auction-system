@@ -62,6 +62,7 @@ class HierarchicalMultiscaleSolver:
 
         return allowed_edges
 
+    
     def solve(self):
         # Base case: Solve depth 0 (Root vs Root)
         cX_pts, cY_pts, c_mu_X, c_mu_Y, cX, cY = self._build_coarsened_problem(0)
@@ -80,6 +81,9 @@ class HierarchicalMultiscaleSolver:
 
             checker.N_set = set(N_guess)
 
+            # --- DIAGNOSTIC PRINT 1: Initial Pruning ---
+            print(f"[Depth {d+1}] Initial induced edges: {len(N_guess)}")
+
             cell_to_idx_Y_coarse = {cell: idx for idx, cell in enumerate(cY)}
             current_beta_for_level = np.zeros(len(fY), dtype=float)
 
@@ -89,6 +93,7 @@ class HierarchicalMultiscaleSolver:
                     parent_idx = cell_to_idx_Y_coarse[lookup_cell]
                     current_beta_for_level[i] = final_beta[parent_idx]
 
+            iteration_count = 1
             while True:
                 hybrid_manager = EpsScalingManager(
                     AuctionOT, X_pts=fX_pts, Y_pts=fY_pts, mu_X=f_mu_X, mu_Y=f_mu_Y, 
@@ -115,6 +120,10 @@ class HierarchicalMultiscaleSolver:
                 checker.run_consistency_check(alpha_prime, final_beta, target_depth=d+1)
                 added = len(checker.N_set) - prev_len
                 N_guess = list(checker.N_set)
+                
+                # --- DIAGNOSTIC PRINT 2: Consistency Check ---
+                print(f"  -> Loop {iteration_count}: Checker added {added} edges. Total active: {len(N_guess)}")
+                iteration_count += 1
 
                 if added == 0:
                     break
@@ -133,8 +142,6 @@ class HierarchicalMultiscaleSolver:
         for i in current_mu:
             for j, mass in current_mu[i].items():
                 if mass > 0:
-                    # Note: You still need logic to distribute mass if len(point_indices) > 1
-                    # This safely grabs the first point as a placeholder.
                     orig_x = final_X[i].point_indices[0] 
                     orig_y = final_Y[j].point_indices[0]
                     sparse_assignments.append((orig_x, orig_y, mass))
