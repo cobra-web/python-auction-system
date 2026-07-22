@@ -45,7 +45,8 @@ class EpsScalingManager:
             # Intercept and force normalize to True to prevent kwarg clashes 
             # and guarantee safe epsilon-scaling math.
             safe_kwargs = self.solver_kwargs.copy()
-            safe_kwargs["normalize"] = True
+            if "normalize" not in safe_kwargs:
+                safe_kwargs["normalize"] = True
 
             solver = self.solver_class(
                 X_pts=self.X_pts,
