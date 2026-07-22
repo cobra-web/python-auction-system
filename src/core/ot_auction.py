@@ -11,7 +11,6 @@ class AuctionOT:
         self.N_X = len(self.X_pts)
         self.N_Y = len(self.Y_pts)
 
-        # Compute max_c based on bounding boxes to avoid dense NxN computation
         if normalize:
             min_X, max_X = np.min(self.X_pts, axis=0), np.max(self.X_pts, axis=0)
             min_Y, max_Y = np.min(self.Y_pts, axis=0), np.max(self.Y_pts, axis=0)
@@ -22,37 +21,80 @@ class AuctionOT:
 
         self.mu_X = np.array(mu_X, dtype=float)
         self.mu_Y = np.array(mu_Y, dtype=float)
-
-        mass_X = float(self.mu_X.sum())
-        mass_Y = float(self.mu_Y.sum())
-        if abs(mass_X - mass_Y) > 1e-6 * max(1.0, mass_X):
-            raise ValueError("Unbalanced OT problem. Sum of marginals must match.")
-
         self.epsilon = float(epsilon) if epsilon is not None else 1e-3
         
-        # Sparse structures
-        self.mu = defaultdict(lambda: defaultdict(float))
         self.assigned_Y = np.zeros(self.N_Y, dtype=float)
         self.unassigned_X = np.copy(self.mu_X)
+        self.beta_diamond = np.array(initial_beta, dtype=float) if initial_beta is not None else np.zeros(self.N_Y, dtype=float)
 
-        if initial_beta is not None:
-            self.beta_diamond = np.array(initial_beta, dtype=float)
-        else:
-            self.beta_diamond = np.zeros(self.N_Y, dtype=float)
-        
-        self.beta_tilde = defaultdict(lambda: defaultdict(float))
-
+        # ---------------------------------------------------------
+        # HYBRID SPARSE STRUCTURES FOR MU AND BETA_TILDE
+        # ---------------------------------------------------------
         if allowed_edges is not None:
+            self.is_sparse = True
             nbrs = [[] for _ in range(self.N_X)]
             for edge in allowed_edges:
                 x, y = int(edge[0]), int(edge[1])
                 nbrs[x].append(y)
+            
             self.neighbors = [np.array(sorted(set(v)), dtype=int) for v in nbrs]
+            
+            # Parallel arrays: indices match the indices in self.neighbors
+            self.mu_arrs = [np.zeros(len(n), dtype=float) for n in self.neighbors]
+            self.beta_tilde_arrs = [np.zeros(len(n), dtype=float) for n in self.neighbors]
+            
         else:
+            self.is_sparse = False
             self.neighbors = None
+            self.mu_dict = defaultdict(lambda: defaultdict(float))
+            self.beta_tilde_dict = defaultdict(lambda: defaultdict(float))
+
+    # --- HELPER FUNCTIONS FOR HYBRID LOOKUPS ---
+    
+    def _get_mu(self, x, y):
+        if self.is_sparse:
+            idx = np.searchsorted(self.neighbors[x], y)
+            if idx < len(self.neighbors[x]) and self.neighbors[x][idx] == y:
+                return self.mu_arrs[x][idx]
+            return 0.0
+        return self.mu_dict[x].get(y, 0.0)
+
+    def _set_mu(self, x, y, val):
+        if self.is_sparse:
+            idx = np.searchsorted(self.neighbors[x], y)
+            self.mu_arrs[x][idx] = val
+        else:
+            self.mu_dict[x][y] = val
+
+    def _get_beta_tilde(self, x, y):
+        if self.is_sparse:
+            idx = np.searchsorted(self.neighbors[x], y)
+            return self.beta_tilde_arrs[x][idx]
+        return self.beta_tilde_dict[x].get(y, 0.0)
+
+    def _set_beta_tilde(self, x, y, val):
+        if self.is_sparse:
+            idx = np.searchsorted(self.neighbors[x], y)
+            self.beta_tilde_arrs[x][idx] = val
+        else:
+            self.beta_tilde_dict[x][y] = val
+
+    def _get_active_xs_for_y(self, y):
+        """Returns a list of x indices that have mass assigned to y"""
+        active_x = []
+        if self.is_sparse:
+            for x in range(self.N_X):
+                idx = np.searchsorted(self.neighbors[x], y)
+                if idx < len(self.neighbors[x]) and self.neighbors[x][idx] == y:
+                    if self.mu_arrs[x][idx] > TOL:
+                        active_x.append(x)
+        else:
+            active_x = [x for x in self.mu_dict.keys() if self.mu_dict[x].get(y, 0.0) > TOL]
+        return active_x
+
+    # ---------------------------------------------------------
 
     def _cost(self, x, ys):
-        """Lazy calculation of normalized squared euclidean distance"""
         sq_dist = np.sum((self.X_pts[x] - self.Y_pts[ys])**2, axis=1)
         return sq_dist / self.max_c
 
@@ -62,10 +104,9 @@ class AuctionOT:
     def get_effective_beta(self):
         eff_beta = np.copy(self.beta_diamond)
         for y in range(self.N_Y):
-            # Find any x that has mu[x][y] > TOL
-            active_x = [x for x in self.mu.keys() if self.mu[x].get(y, 0.0) > TOL]
+            active_x = self._get_active_xs_for_y(y)
             if active_x:
-                eff_beta[y] = max(eff_beta[y], max(self.beta_tilde[x].get(y, 0.0) for x in active_x))
+                eff_beta[y] = max(eff_beta[y], max(self._get_beta_tilde(x, y) for x in active_x))
         return eff_beta
 
     def _admissible(self, x):
@@ -87,19 +128,19 @@ class AuctionOT:
         caps_free = free_Y[free_mask]
         xp_free = np.full(len(valid_ys_free), -1, dtype=int)
 
-        # Extract active assignments for y in ys to find occupied slots
         xp_indices = []
         y_idx_local = []
         mu_vals = []
         beta_tilde_vals = []
         
         for idx, y in enumerate(ys):
-            for xp in self.mu.keys():
-                if xp != x and self.mu[xp].get(y, 0.0) > TOL:
+            active_xs = self._get_active_xs_for_y(y)
+            for xp in active_xs:
+                if xp != x:
                     xp_indices.append(xp)
                     y_idx_local.append(idx)
-                    mu_vals.append(self.mu[xp][y])
-                    beta_tilde_vals.append(self.beta_tilde[xp][y])
+                    mu_vals.append(self._get_mu(xp, y))
+                    beta_tilde_vals.append(self._get_beta_tilde(xp, y))
 
         if xp_indices:
             actual_ys = ys[y_idx_local]
@@ -149,22 +190,22 @@ class AuctionOT:
             if take <= TOL: 
                 return 0.0
             
-            self.mu[x][y] += take
+            self._set_mu(x, y, self._get_mu(x, y) + take)
             self.assigned_Y[y] += take
             self.unassigned_X[x] -= take
-            self.beta_tilde[x][y] = new_beta_tilde
+            self._set_beta_tilde(x, y, new_beta_tilde)
             return take
         else:
-            avail = self.mu[owner_xp].get(y, 0.0)
+            avail = self._get_mu(owner_xp, y)
             take = min(amount, avail)
             if take <= TOL: 
                 return 0.0
             
-            self.mu[owner_xp][y] -= take
-            self.mu[x][y] += take
+            self._set_mu(owner_xp, y, self._get_mu(owner_xp, y) - take)
+            self._set_mu(x, y, self._get_mu(x, y) + take)
             self.unassigned_X[owner_xp] += take
             self.unassigned_X[x] -= take
-            self.beta_tilde[x][y] = new_beta_tilde
+            self._set_beta_tilde(x, y, new_beta_tilde)
             return take
 
     def solve(self):
@@ -216,6 +257,20 @@ class AuctionOT:
                 print(f"[AuctionOT] Deadlock at iter {iterations}; unassigned = {total_unassigned:.3e}.")
                 break
 
-        # Reconstruct sparse total cost
-        cost = sum(self.mu[x][y] * self._cost_raw(x, y) for x in self.mu for y in self.mu[x])
-        return self.mu, cost, iterations
+        # Reconstruct sparse total cost and output dictionary for compatibility
+        out_mu = defaultdict(lambda: defaultdict(float))
+        cost = 0.0
+        for x in range(self.N_X):
+            if self.is_sparse:
+                for idx, y in enumerate(self.neighbors[x]):
+                    mass = self.mu_arrs[x][idx]
+                    if mass > TOL:
+                        out_mu[x][y] = mass
+                        cost += mass * self._cost_raw(x, y)
+            else:
+                for y, mass in self.mu_dict[x].items():
+                    if mass > TOL:
+                        out_mu[x][y] = mass
+                        cost += mass * self._cost_raw(x, y)
+                        
+        return out_mu, cost, iterations
