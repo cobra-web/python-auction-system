@@ -105,9 +105,17 @@ class HierarchicalMultiscaleSolver:
                 current_mu, total_cost, total_iters, final_beta = hybrid_manager.solve()
                 current_beta_for_level = final_beta
 
+                from collections import defaultdict
+                
+                # 1. Scan N_guess exactly ONCE and bucket them
+                ys_by_x = defaultdict(list)
+                for xp, y in N_guess:
+                    ys_by_x[xp].append(y)
+
+                # 2. Calculate alpha using the fast buckets
                 alpha = np.zeros(len(f_mu_X))
                 for x in range(len(f_mu_X)):
-                    valid_ys = [y for (x_prime, y) in N_guess if x_prime == x]
+                    valid_ys = ys_by_x[x] # INSTANT lookup! No more scanning.
                     if len(valid_ys) > 0:
                         min_dists = [checker._bbox_min_sq_dist(fX[x].bbox, fY[y].bbox) for y in valid_ys]
                         alpha[x] = np.min(np.array(min_dists) - final_beta[valid_ys])
