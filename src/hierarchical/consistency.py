@@ -9,35 +9,49 @@ class ConsistencyChecker:
         self.beta_hat = {}
         self.c_hat_cache = {}
 
-    def _compute_extensions(self, alpha_prime, beta, target_gen):
-        cell_to_idx_X = {cell: idx for idx, cell in enumerate(self.tree_X.generations[target_gen])}
-        cell_to_idx_Y = {cell: idx for idx, cell in enumerate(self.tree_Y.generations[target_gen])}
+    def _compute_extensions(self, alpha_prime, beta, target_depth):
+        """Compute extended dual variables upwards from the target active depth"""
+        cells_X_target = self.tree_X.get_active_cells_at_depth(target_depth)
+        cells_Y_target = self.tree_Y.get_active_cells_at_depth(target_depth)
 
-        for gen in range(target_gen, self.tree_X.g):
-            for cell in self.tree_X.generations[gen]:
-                if gen == target_gen:
-                    self.alpha_prime_hat[cell.id] = alpha_prime[cell_to_idx_X[cell]]
-                else:
-                    if cell.children:
-                        self.alpha_prime_hat[cell.id] = max(
-                            self.alpha_prime_hat[child.id] for child in cell.children
-                        )
+        cell_to_idx_X = {cell: idx for idx, cell in enumerate(cells_X_target)}
+        cell_to_idx_Y = {cell: idx for idx, cell in enumerate(cells_Y_target)}
 
-        for gen in range(target_gen, self.tree_Y.g):
-            for cell in self.tree_Y.generations[gen]:
-                if gen == target_gen:
-                    self.beta_hat[cell.id] = beta[cell_to_idx_Y[cell]]
-                else:
-                    if cell.children:
-                        self.beta_hat[cell.id] = max(
-                            self.beta_hat[child.id] for child in cell.children
-                        )
+        self.alpha_prime_hat = {}
+        self.beta_hat = {}
+
+        for cell in cells_X_target:
+            self.alpha_prime_hat[cell.id] = alpha_prime[cell_to_idx_X[cell]]
+            
+        for cell in cells_Y_target:
+            self.beta_hat[cell.id] = beta[cell_to_idx_Y[cell]]
+
+        # Recursively map max dual variables up to the root
+        def _propagate_up_X(node):
+            if node.id in self.alpha_prime_hat:
+                return self.alpha_prime_hat[node.id]
+            if not node.children:
+                return -float('inf') 
+            val = max(_propagate_up_X(child) for child in node.children)
+            self.alpha_prime_hat[node.id] = val
+            return val
+
+        def _propagate_up_Y(node):
+            if node.id in self.beta_hat:
+                return self.beta_hat[node.id]
+            if not node.children:
+                return -float('inf')
+            val = max(_propagate_up_Y(child) for child in node.children)
+            self.beta_hat[node.id] = val
+            return val
+
+        _propagate_up_X(self.tree_X.cells[0]) 
+        _propagate_up_Y(self.tree_Y.cells[0])
 
         self._cell_to_idx_X = cell_to_idx_X
         self._cell_to_idx_Y = cell_to_idx_Y
 
     def _bbox_min_sq_dist(self, bbox_a, bbox_b):
-        """Calculates exact min squared euclidean distance between two bboxes"""
         min_a, max_a = bbox_a
         min_b, max_b = bbox_b
         dist = 0.0
@@ -47,7 +61,6 @@ class ConsistencyChecker:
         return dist
 
     def _c_hat(self, cell_a, cell_b):
-        """Compute extended cost (Eq. 12) via bounding boxes dynamically"""
         cache_key = (cell_a.id, cell_b.id)
         if cache_key in self.c_hat_cache:
             return self.c_hat_cache[cache_key]
@@ -56,23 +69,18 @@ class ConsistencyChecker:
         self.c_hat_cache[cache_key] = val
         return val
 
-    def run_consistency_check(self, alpha_prime, beta, target_gen, start_gen=None):
-        self._compute_extensions(alpha_prime, beta, target_gen)
+    def run_consistency_check(self, alpha_prime, beta, target_depth):
+        self._compute_extensions(alpha_prime, beta, target_depth)
 
-        if start_gen is None:
-            start_gen = self.tree_X.g - 1
-
-        new_edges = []
-        for cell_a in self.tree_X.generations[start_gen]:
-            for cell_b in self.tree_Y.generations[start_gen]:
-                new_edges.extend(self._check_recursive(cell_a, cell_b, alpha_prime, beta, target_gen))
+        # Always initiate check from the root (depth 0)
+        new_edges = self._check_recursive(self.tree_X.cells[0], self.tree_Y.cells[0], alpha_prime, beta, target_depth)
 
         for x, y in new_edges:
             self.N_set.add((x, y))
 
         return new_edges
 
-    def _check_recursive(self, cell_a, cell_b, alpha_prime, beta, target_gen):
+    def _check_recursive(self, cell_a, cell_b, alpha_prime, beta, target_depth):
         c_hat_val = self._c_hat(cell_a, cell_b)
         a_prime_hat = self.alpha_prime_hat[cell_a.id]
         b_hat = self.beta_hat[cell_b.id]
@@ -80,8 +88,8 @@ class ConsistencyChecker:
         if c_hat_val - b_hat >= a_prime_hat:
             return []
 
-        cell_a_is_terminal = (cell_a.generation == target_gen) or (not cell_a.children)
-        cell_b_is_terminal = (cell_b.generation == target_gen) or (not cell_b.children)
+        cell_a_is_terminal = (cell_a.depth == target_depth) or (not cell_a.children)
+        cell_b_is_terminal = (cell_b.depth == target_depth) or (not cell_b.children)
 
         if cell_a_is_terminal and cell_b_is_terminal:
             x = self._cell_to_idx_X[cell_a]
@@ -95,15 +103,15 @@ class ConsistencyChecker:
             return found_edges
 
         found_edges = []
-        if cell_a.children and cell_b.children:
+        if not cell_a_is_terminal and not cell_b_is_terminal:
             for child_a in cell_a.children:
                 for child_b in cell_b.children:
-                    found_edges.extend(self._check_recursive(child_a, child_b, alpha_prime, beta, target_gen))
-        elif cell_a.children:
+                    found_edges.extend(self._check_recursive(child_a, child_b, alpha_prime, beta, target_depth))
+        elif not cell_a_is_terminal:
             for child_a in cell_a.children:
-                found_edges.extend(self._check_recursive(child_a, cell_b, alpha_prime, beta, target_gen))
-        elif cell_b.children:
+                found_edges.extend(self._check_recursive(child_a, cell_b, alpha_prime, beta, target_depth))
+        elif not cell_b_is_terminal:
             for child_b in cell_b.children:
-                found_edges.extend(self._check_recursive(cell_a, child_b, alpha_prime, beta, target_gen))
+                found_edges.extend(self._check_recursive(cell_a, child_b, alpha_prime, beta, target_depth))
 
         return found_edges
