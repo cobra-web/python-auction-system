@@ -8,7 +8,6 @@ import matplotlib.pyplot as plt
 from src.utils.cost_functions import squared_euclidean
 from src.utils.eps_scaling import EpsScalingManager
 from src.core.ot_auction import AuctionOT
-from src.core.lap_auction import AuctionLAP
 from src.hierarchical.partitions import HierarchicalPartition
 from src.hierarchical.multiscale_solver import HierarchicalMultiscaleSolver
 
@@ -30,11 +29,11 @@ def build_matched_trees(X_pts, Y_pts, max_points_per_cell=1, max_allowed_depth=1
 
 def run_comprehensive_benchmarks():
     print("\n=============================================================================================================")
-    print("BACHELOR THESIS: MULTI-SEED RIGOROUS BENCHMARK (TIGHT EPSILON)")
+    print("BACHELOR THESIS: MULTI-SEED RIGOROUS BENCHMARK (UNIFIED SCALE & TIGHT EPSILON)")
     print("=============================================================================================================\n")
     
-    scales = [16, 32, 64, 128, 256, 512, 1024]
-    seeds = [42, 50, 100, 2024, 999]  # 5 distinct runs
+    scales = [16, 32, 64, 128, 256, 512]
+    seeds = [42, 50, 100, 2024, 999]  # 5 distinct runs for statistical significance
     
     results = {
         'N': scales,
@@ -50,7 +49,6 @@ def run_comprehensive_benchmarks():
         dense_times, hier_times = [], []
         dense_gaps, hier_gaps = [], []
         
-        # Enforce a strict epsilon schedule for apples-to-apples comparison
         tight_target = 0.5 / (N + 1)
         tight_min = 1e-5
 
@@ -79,24 +77,19 @@ def run_comprehensive_benchmarks():
             # Build trees for hierarchical solver
             tree_X, tree_Y = build_matched_trees(X_pts, Y_pts)
 
-            # =========================================================
-            # INSERT GLOBAL COST SCALE & PARAMS HERE
-            # =========================================================
+            # Compute global cost scale for this point cloud pair
             gmin = np.minimum(X_pts.min(axis=0), Y_pts.min(axis=0))
             gmax = np.maximum(X_pts.max(axis=0), Y_pts.max(axis=0))
             GLOBAL_MAX_C = float(np.sum((gmax - gmin) ** 2)) or 1.0
 
-            tight_target = 0.5 / (N + 1)
-            tight_min = 1e-5
-            
             # ---------------------------------------------------------
-            # DENSE OT (Forced to Raw Units)
+            # DENSE OT (Shared Global Scale & Tight Epsilon)
             # ---------------------------------------------------------
             t1 = time.perf_counter()
             with SilencePrints():
                 dense_manager = EpsScalingManager(
                     AuctionOT, X_pts=X_pts, Y_pts=Y_pts, mu_X=mu_X, mu_Y=mu_Y,
-                    normalize=False, target_eps=tight_target, min_eps=tight_min
+                    normalize=False, max_c=GLOBAL_MAX_C, target_eps=tight_target, min_eps=tight_min
                 )
                 dense_mu_dict, _, _, _ = dense_manager.solve()
             dense_times.append(time.perf_counter() - t1)
@@ -108,13 +101,14 @@ def run_comprehensive_benchmarks():
             dense_gaps.append(((np.sum(dense_mu * C) - exact_cost) / exact_cost) * 100)
 
             # ---------------------------------------------------------
-            # HIERARCHICAL OT
+            # HIERARCHICAL OT (Shared Global Scale & Tight Epsilon)
             # ---------------------------------------------------------
-            tree_X, tree_Y = build_matched_trees(X_pts, Y_pts)
             t2 = time.perf_counter()
             with SilencePrints():
-                # Hierarchical internally passes normalize=False, so now they match!
-                multiscale_solver = HierarchicalMultiscaleSolver(tree_X, tree_Y, mu_X, mu_Y)
+                multiscale_solver = HierarchicalMultiscaleSolver(
+                    tree_X, tree_Y, mu_X, mu_Y, 
+                    max_c=GLOBAL_MAX_C, target_eps=tight_target, min_eps=tight_min
+                )
                 sparse_hier_mu = multiscale_solver.solve()
             hier_times.append(time.perf_counter() - t2)
             
@@ -160,7 +154,19 @@ def plot_results(results):
     plt.legend(fontsize=12)
     plt.tight_layout()
     plt.savefig('thesis_scaling_plot.pdf')
-    print("Saved 'thesis_scaling_plot.pdf' to disk.")
+    
+    plt.figure(figsize=(8, 6))
+    plt.semilogx(N_arr, results['dense_gap_mean'], marker='o', label='Dense Gap %', linewidth=2)
+    plt.semilogx(N_arr, results['hier_gap_mean'], marker='s', label='Hierarchical Gap %', linewidth=2)
+    
+    plt.title('Optimality Gap vs Exact POT Reference', fontsize=14)
+    plt.xlabel('Number of Points (N)', fontsize=12)
+    plt.ylabel('Relative Gap (%)', fontsize=12)
+    plt.grid(True, ls="--", alpha=0.5)
+    plt.legend(fontsize=12)
+    plt.tight_layout()
+    plt.savefig('thesis_gap_plot.pdf')
+    print("Saved 'thesis_scaling_plot.pdf' and 'thesis_gap_plot.pdf' to disk.")
 
 if __name__ == "__main__":
     final_results = run_comprehensive_benchmarks()
