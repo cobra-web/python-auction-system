@@ -4,8 +4,7 @@ from collections import defaultdict
 TOL = 1e-7
 
 class AuctionOT:
-    def __init__(self, X_pts, Y_pts, mu_X, mu_Y, epsilon=None,
-             allowed_edges=None, initial_beta=None, normalize=True, max_c=None):
+    def __init__(self, X_pts, Y_pts, mu_X, mu_Y, epsilon=None, allowed_edges=None, initial_beta=None, normalize=True, max_c=None):
     self.X_pts = np.array(X_pts, dtype=float)
     self.Y_pts = np.array(Y_pts, dtype=float)
     self.N_X = len(self.X_pts)
