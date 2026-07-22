@@ -27,10 +27,8 @@ class AuctionOT:
 
         self.epsilon = float(epsilon) if epsilon is not None else 1e-3
         
-        # --- State Matrices ---
         self.mu = np.zeros((self.N_X, self.N_Y), dtype=float)
         
-        # O(1) Incremental mass trackers (Eliminates np.sum in inner loops)
         self.assigned_Y = np.zeros(self.N_Y, dtype=float)
         self.unassigned_X = np.copy(self.mu_X)
 
@@ -64,12 +62,10 @@ class AuctionOT:
         return self.neighbors[x]
 
     def _sorted_slots(self, x):
-        """Pure vectorized candidate generation. No Python list appends."""
         ys = self._admissible(x)
         if ys.size == 0:
             return None
 
-        # 1. Evaluate Free Capacity
         free_Y = self.mu_Y[ys] - self.assigned_Y[ys]
         free_mask = free_Y > TOL
         
@@ -78,11 +74,9 @@ class AuctionOT:
         caps_free = free_Y[free_mask]
         xp_free = np.full(len(valid_ys_free), -1, dtype=int)
 
-        # 2. Evaluate Occupied Capacity
         mu_sub = self.mu[:, ys]
         xp_indices, y_idx_local = np.nonzero(mu_sub > TOL)
         
-        # Fast filter to exclude x displacing itself
         other_mask = xp_indices != x
         xp_indices = xp_indices[other_mask]
         y_idx_local = y_idx_local[other_mask]
@@ -91,7 +85,6 @@ class AuctionOT:
         slacks_occ = self.C[x, actual_ys] - self.beta_tilde[xp_indices, actual_ys]
         caps_occ = mu_sub[xp_indices, y_idx_local]
 
-        # Combine all candidates dynamically
         slacks = np.concatenate((slacks_free, slacks_occ))
         if slacks.size == 0:
             return None
@@ -100,7 +93,6 @@ class AuctionOT:
         ys_arr = np.concatenate((valid_ys_free, actual_ys))
         xp_arr = np.concatenate((xp_free, xp_indices))
         
-        # Sort ascending by slack
         order = np.argsort(slacks, kind="stable")
         
         return ys_arr[order], slacks[order], caps[order], xp_arr[order]
@@ -120,12 +112,10 @@ class AuctionOT:
         return slacks[-1], n - 1
 
     def _place(self, x, y, owner_xp, amount, new_beta_tilde):
-        """Moves mass and updates tracking arrays in O(1) time."""
         if amount <= TOL:
             return 0.0
             
         if owner_xp == -1:
-            # Consuming free capacity
             free = self.mu_Y[y] - self.assigned_Y[y]
             take = min(amount, free)
             if take <= TOL: 
@@ -137,7 +127,6 @@ class AuctionOT:
             self.beta_tilde[x, y] = new_beta_tilde
             return take
         else:
-            # Displacing mass owned by owner_xp
             avail = self.mu[owner_xp, y]
             take = min(amount, avail)
             if take <= TOL: 
@@ -156,7 +145,6 @@ class AuctionOT:
         eps = self.epsilon
 
         while iterations < max_iterations:
-            # Snap unassigned mass dynamically rather than computing np.sum(mu)
             self.unassigned_X = np.where(self.unassigned_X < TOL, 0.0, self.unassigned_X)
             total_unassigned = float(np.sum(self.unassigned_X))
 
@@ -199,5 +187,5 @@ class AuctionOT:
                 print(f"[AuctionOT] Deadlock at iter {iterations}; unassigned = {total_unassigned:.3e}.")
                 break
 
-        cost = float(np.sum(self.mu * self.C))
+        cost = float(np.sum(self.mu * self.C_raw))
         return self.mu, cost, iterations
