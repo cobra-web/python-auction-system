@@ -28,6 +28,11 @@ class AuctionOT:
         self.beta_diamond = np.array(initial_beta, dtype=float) if initial_beta is not None else np.zeros(self.N_Y, dtype=float)
 
         # ---------------------------------------------------------
+        # UNCONDITIONAL OWNERSHIP TRACKING (For both Dense and Sparse)
+        # ---------------------------------------------------------
+        self.owners = [set() for _ in range(self.N_Y)]
+
+        # ---------------------------------------------------------
         # HYBRID SPARSE STRUCTURES FOR MU AND BETA_TILDE
         # ---------------------------------------------------------
         if allowed_edges is not None:
@@ -43,8 +48,6 @@ class AuctionOT:
             self.mu_arrs = [np.zeros(len(n), dtype=float) for n in self.neighbors]
             self.beta_tilde_arrs = [np.zeros(len(n), dtype=float) for n in self.neighbors]
             
-            # --- CLAUDE'S FIX: Fast lookups and Reverse Index ---
-            self.owners = [set() for _ in range(self.N_Y)]
             self.col_index = [{int(y): i for i, y in enumerate(nbr)} for nbr in self.neighbors]
             
         else:
@@ -89,10 +92,8 @@ class AuctionOT:
 
     def _get_active_xs_for_y(self, y):
         """Returns a list of x indices that have mass assigned to y"""
-        if self.is_sparse:
-            # --- CLAUDE'S FIX: O(1) set lookup instead of O(N_X) scan ---
-            return [x for x in self.owners[y] if self._get_mu(x, y) > TOL]
-        return [x for x in self.mu_dict if self.mu_dict[x].get(y, 0.0) > TOL]
+        # Unconditional O(1) set lookup instead of O(N_X) scan
+        return [x for x in self.owners[y] if self._get_mu(x, y) > TOL]
 
     # ---------------------------------------------------------
 
@@ -193,8 +194,9 @@ class AuctionOT:
                 return 0.0
             
             self._set_mu(x, y, self._get_mu(x, y) + take)
-            # --- CLAUDE'S FIX: Update ownership ---
-            if self.is_sparse: self.owners[y].add(x) 
+            
+            # Unconditional ownership update
+            self.owners[y].add(x) 
 
             self.assigned_Y[y] += take
             self.unassigned_X[x] -= take
@@ -209,11 +211,10 @@ class AuctionOT:
             self._set_mu(owner_xp, y, self._get_mu(owner_xp, y) - take)
             self._set_mu(x, y, self._get_mu(x, y) + take)
             
-            # --- CLAUDE'S FIX: Transfer ownership ---
-            if self.is_sparse:
-                if self._get_mu(owner_xp, y) <= TOL:
-                    self.owners[y].discard(owner_xp)
-                self.owners[y].add(x)
+            # Unconditional ownership transfer
+            if self._get_mu(owner_xp, y) <= TOL:
+                self.owners[y].discard(owner_xp)
+            self.owners[y].add(x)
 
             self.unassigned_X[owner_xp] += take
             self.unassigned_X[x] -= take
