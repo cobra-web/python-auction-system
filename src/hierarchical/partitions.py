@@ -6,7 +6,7 @@ class PartitionCell:
         self.point_indices = point_indices  
         self.parent = None
         self.children = []
-        self.depth = depth                  # Root = 0
+        self.depth = depth                  # Root = 0..
         self.bbox = bbox                    # tuple: (min_bounds, max_bounds)
     
     def __repr__(self):
