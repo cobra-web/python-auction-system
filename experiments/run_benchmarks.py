@@ -18,11 +18,10 @@ class SilencePrints:
         sys.stdout.close()
         sys.stdout = self._original_stdout
 
-def build_matched_trees(X_pts, Y_pts, max_points_per_cell=8, max_allowed_depth=10):
+def build_matched_trees(X_pts, Y_pts, max_points_per_cell=1, max_allowed_depth=15):
     probe_X = HierarchicalPartition(X_pts, max_points_per_cell=max_points_per_cell, max_allowed_depth=max_allowed_depth)
     probe_Y = HierarchicalPartition(Y_pts, max_points_per_cell=max_points_per_cell, max_allowed_depth=max_allowed_depth)
 
-    # FIXED: Replaced .g with .max_depth
     target_depth = max(probe_X.max_depth, probe_Y.max_depth)
     
     tree_X = HierarchicalPartition(X_pts, max_points_per_cell=max_points_per_cell, max_allowed_depth=target_depth)
