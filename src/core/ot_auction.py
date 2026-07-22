@@ -43,6 +43,10 @@ class AuctionOT:
             self.mu_arrs = [np.zeros(len(n), dtype=float) for n in self.neighbors]
             self.beta_tilde_arrs = [np.zeros(len(n), dtype=float) for n in self.neighbors]
             
+            # --- CLAUDE'S FIX: Fast lookups and Reverse Index ---
+            self.owners = [set() for _ in range(self.N_Y)]
+            self.col_index = [{int(y): i for i, y in enumerate(nbr)} for nbr in self.neighbors]
+            
         else:
             self.is_sparse = False
             self.neighbors = None
@@ -53,44 +57,42 @@ class AuctionOT:
     
     def _get_mu(self, x, y):
         if self.is_sparse:
-            idx = np.searchsorted(self.neighbors[x], y)
-            if idx < len(self.neighbors[x]) and self.neighbors[x][idx] == y:
+            idx = self.col_index[x].get(y)
+            if idx is not None:
                 return self.mu_arrs[x][idx]
             return 0.0
         return self.mu_dict[x].get(y, 0.0)
 
     def _set_mu(self, x, y, val):
         if self.is_sparse:
-            idx = np.searchsorted(self.neighbors[x], y)
-            self.mu_arrs[x][idx] = val
+            idx = self.col_index[x].get(y)
+            if idx is not None:
+                self.mu_arrs[x][idx] = val
         else:
             self.mu_dict[x][y] = val
 
     def _get_beta_tilde(self, x, y):
         if self.is_sparse:
-            idx = np.searchsorted(self.neighbors[x], y)
-            return self.beta_tilde_arrs[x][idx]
+            idx = self.col_index[x].get(y)
+            if idx is not None:
+                return self.beta_tilde_arrs[x][idx]
+            return 0.0
         return self.beta_tilde_dict[x].get(y, 0.0)
 
     def _set_beta_tilde(self, x, y, val):
         if self.is_sparse:
-            idx = np.searchsorted(self.neighbors[x], y)
-            self.beta_tilde_arrs[x][idx] = val
+            idx = self.col_index[x].get(y)
+            if idx is not None:
+                self.beta_tilde_arrs[x][idx] = val
         else:
             self.beta_tilde_dict[x][y] = val
 
     def _get_active_xs_for_y(self, y):
         """Returns a list of x indices that have mass assigned to y"""
-        active_x = []
         if self.is_sparse:
-            for x in range(self.N_X):
-                idx = np.searchsorted(self.neighbors[x], y)
-                if idx < len(self.neighbors[x]) and self.neighbors[x][idx] == y:
-                    if self.mu_arrs[x][idx] > TOL:
-                        active_x.append(x)
-        else:
-            active_x = [x for x in self.mu_dict.keys() if self.mu_dict[x].get(y, 0.0) > TOL]
-        return active_x
+            # --- CLAUDE'S FIX: O(1) set lookup instead of O(N_X) scan ---
+            return [x for x in self.owners[y] if self._get_mu(x, y) > TOL]
+        return [x for x in self.mu_dict if self.mu_dict[x].get(y, 0.0) > TOL]
 
     # ---------------------------------------------------------
 
@@ -191,6 +193,9 @@ class AuctionOT:
                 return 0.0
             
             self._set_mu(x, y, self._get_mu(x, y) + take)
+            # --- CLAUDE'S FIX: Update ownership ---
+            if self.is_sparse: self.owners[y].add(x) 
+
             self.assigned_Y[y] += take
             self.unassigned_X[x] -= take
             self._set_beta_tilde(x, y, new_beta_tilde)
@@ -203,6 +208,13 @@ class AuctionOT:
             
             self._set_mu(owner_xp, y, self._get_mu(owner_xp, y) - take)
             self._set_mu(x, y, self._get_mu(x, y) + take)
+            
+            # --- CLAUDE'S FIX: Transfer ownership ---
+            if self.is_sparse:
+                if self._get_mu(owner_xp, y) <= TOL:
+                    self.owners[y].discard(owner_xp)
+                self.owners[y].add(x)
+
             self.unassigned_X[owner_xp] += take
             self.unassigned_X[x] -= take
             self._set_beta_tilde(x, y, new_beta_tilde)
