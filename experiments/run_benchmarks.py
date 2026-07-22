@@ -29,17 +29,21 @@ def build_matched_trees(X_pts, Y_pts, max_points_per_cell=1, max_allowed_depth=1
     return tree_X, tree_Y
 
 def run_comprehensive_benchmarks():
-    print("\n================================================================================")
+    print("\n=============================================================================================================")
     print("BACHELOR THESIS: OPTIMAL TRANSPORT SOLVER BENCHMARK (WITH PROFESSOR DIAGNOSTICS)")
-    print("================================================================================\n")
+    print("=============================================================================================================\n")
+    
+    # Table Header
+    header = f"| {'N':<4} | {'Method':<15} | {'Time (s)':<10} | {'Rep. Cost':<10} | {'Man. Cost':<10} | {'Mass (Soll)':<15} | {'Pairs (Max)':<12} | {'Primal Match':<12} |"
+    separator = "-" * len(header)
+    
+    print(separator)
+    print(header)
+    print(separator)
     
     scales = [16, 32, 64, 128]
     
     for N in scales:
-        print("-" * 80)
-        print(f"STARTE DIAGNOSE FÜR SKALA N = {N}")
-        print("-" * 80)
-        
         np.random.seed(42)
         X_pts = np.random.rand(N, 2)
         Y_pts = np.random.rand(N, 2)
@@ -64,7 +68,6 @@ def run_comprehensive_benchmarks():
             t0 = time.perf_counter()
             with SilencePrints():
                 lap_solver = AuctionLAP(C)
-                # FIXED: Unpack all three return variables
                 lap_assignment, lap_cost, lap_iters = lap_solver.solve()
             t_lap = time.perf_counter() - t0
             
@@ -73,9 +76,9 @@ def run_comprehensive_benchmarks():
                 if y != -1: lap_mu[x, y] = 1.0
                 
             manual_lap_cost = np.sum(lap_mu * C)
-            print(f"[LAP Reference]   Zeit: {t_lap:.5f}s | Gemeldete Kosten: {manual_lap_cost:.4f}")
+            print(f"| {N:<4} | {'LAP Reference':<15} | {t_lap:<10.5f} | {'-':<10} | {manual_lap_cost:<10.4f} | {'-':<15} | {'-':<12} | {'-':<12} |")
         except Exception as e:
-            print(f"[LAP Reference]   FEHLGESCHLAGEN")
+            print(f"| {N:<4} | {'LAP Reference':<15} | {'FAIL':<10} | {'-':<10} | {'-':<10} | {'-':<15} | {'-':<12} | {'-':<12} |")
             import traceback; traceback.print_exc()
             
         dense_mu = None
@@ -95,14 +98,9 @@ def run_comprehensive_benchmarks():
             actual_dense_mass = np.sum(dense_mu)
             active_dense_pairs = np.sum(dense_mu > 1e-5)
             
-            print(f"\n[DENSE OT RESULT]")
-            print(f"  -> Runtime: {t_dense:.5f}s")
-            print(f"  -> Gemeldete Solver-Kosten:    {dense_reported_cost:.4f}")
-            print(f"  -> Manuell nachgerechnete Kosten: {manual_dense_cost:.4f}  <-- Check 3")
-            print(f"  -> Transportierte Gesamtmasse:   {actual_dense_mass:.2f} (Soll: {total_problem_mass}) <-- Check 2")
-            print(f"  -> Anzahl aktiver Paare (>1e-5): {active_dense_pairs} (Theor. Max: {2*N-1}) <-- Check 1")
+            print(f"| {N:<4} | {'DENSE OT':<15} | {t_dense:<10.5f} | {dense_reported_cost:<10.4f} | {manual_dense_cost:<10.4f} | {f'{actual_dense_mass:.2f} ({total_problem_mass})':<15} | {f'{active_dense_pairs} ({2*N-1})':<12} | {'-':<12} |")
         except Exception as e:
-            print(f"\n[DENSE OT] FEHLGESCHLAGEN")
+            print(f"| {N:<4} | {'DENSE OT':<15} | {'FAIL':<10} | {'-':<10} | {'-':<10} | {'-':<15} | {'-':<12} | {'-':<12} |")
             import traceback; traceback.print_exc()
 
         try:
@@ -122,20 +120,15 @@ def run_comprehensive_benchmarks():
             actual_hier_mass = np.sum(hier_mu)
             active_hier_pairs = np.sum(hier_mu > 1e-5)
             
-            print(f"\n[HIERARCHICAL OT RESULT]")
-            print(f"  -> Runtime: {t_hier:.5f}s")
-            print(f"  -> Manuell nachgerechnete Kosten: {manual_hier_cost:.4f}  <-- Check 3")
-            print(f"  -> Transportierte Gesamtmasse:   {actual_hier_mass:.2f} (Soll: {total_problem_mass}) <-- Check 2")
-            print(f"  -> Anzahl aktiver Paare (>1e-5): {active_hier_pairs} (Theor. Max: {2*N-1}) <-- Check 1")
-            
             matrices_identical = np.allclose(dense_mu, hier_mu, atol=1e-3) if dense_mu is not None else False
-            print(f"  -> Struktur-Abgleich: Sind Primalpläne identisch? {matrices_identical}")
+            
+            print(f"| {N:<4} | {'HIERARCH. OT':<15} | {t_hier:<10.5f} | {'-':<10} | {manual_hier_cost:<10.4f} | {f'{actual_hier_mass:.2f} ({total_problem_mass})':<15} | {f'{active_hier_pairs} ({2*N-1})':<12} | {str(matrices_identical):<12} |")
             
         except Exception as e:
-            print(f"\n[HIERARCHICAL OT] FEHLGESCHLAGEN")
+            print(f"| {N:<4} | {'HIERARCH. OT':<15} | {'FAIL':<10} | {'-':<10} | {'-':<10} | {'-':<15} | {'-':<12} | {'-':<12} |")
             import traceback; traceback.print_exc()
             
-        print("\n" + "="*80 + "\n")
+        print(separator)
 
 if __name__ == "__main__":
     run_comprehensive_benchmarks()
