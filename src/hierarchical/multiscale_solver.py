@@ -144,15 +144,19 @@ class HierarchicalMultiscaleSolver:
 
         # Reconstruction to sparse assignment list
         sparse_assignments = []
-        # The final assignment is at max_depth
         final_X = self.tree_X.get_active_cells_at_depth(self.max_depth)
         final_Y = self.tree_Y.get_active_cells_at_depth(self.max_depth)
         
         for i in current_mu:
             for j, mass in current_mu[i].items():
-                if mass > 0:
-                    orig_x = final_X[i].point_indices[0] 
-                    orig_y = final_Y[j].point_indices[0]
-                    sparse_assignments.append((orig_x, orig_y, mass))
+                if mass > 1e-8:
+                    x_indices = final_X[i].point_indices
+                    y_indices = final_Y[j].point_indices
+                    
+                    # Distribute mass safely if coincident points exist
+                    mass_per_pair = mass / (len(x_indices) * len(y_indices))
+                    for orig_x in x_indices:
+                        for orig_y in y_indices:
+                            sparse_assignments.append((orig_x, orig_y, mass_per_pair))
 
         return sparse_assignments
