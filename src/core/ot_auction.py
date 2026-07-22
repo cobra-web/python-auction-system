@@ -4,21 +4,59 @@ from collections import defaultdict
 TOL = 1e-7
 
 class AuctionOT:
-    def __init__(self, X_pts, Y_pts, mu_X, mu_Y, epsilon=None, allowed_edges=None, initial_beta=None, normalize=True, max_c=None):
-    self.X_pts = np.array(X_pts, dtype=float)
-    self.Y_pts = np.array(Y_pts, dtype=float)
-    self.N_X = len(self.X_pts)
-    self.N_Y = len(self.Y_pts)
+    def __init__(self, X_pts, Y_pts, mu_X, mu_Y, epsilon=None,
+                 allowed_edges=None, initial_beta=None, normalize=True, max_c=None):
+        self.X_pts = np.array(X_pts, dtype=float)
+        self.Y_pts = np.array(Y_pts, dtype=float)
+        self.N_X = len(self.X_pts)
+        self.N_Y = len(self.Y_pts)
 
-    if max_c is not None:
-        self.max_c = float(max_c)
-    elif normalize:
-        min_X, max_X = np.min(self.X_pts, axis=0), np.max(self.X_pts, axis=0)
-        min_Y, max_Y = np.min(self.Y_pts, axis=0), np.max(self.Y_pts, axis=0)
-        max_dist_sq = np.sum((np.maximum(max_X, max_Y) - np.minimum(min_X, min_Y))**2)
-        self.max_c = max_dist_sq if max_dist_sq > 0 else 1.0
-    else:
-        self.max_c = 1.0
+        if max_c is not None:
+            self.max_c = float(max_c)
+        elif normalize:
+            min_X, max_X = np.min(self.X_pts, axis=0), np.max(self.X_pts, axis=0)
+            min_Y, max_Y = np.min(self.Y_pts, axis=0), np.max(self.Y_pts, axis=0)
+            max_dist_sq = np.sum((np.maximum(max_X, max_Y) - np.minimum(min_X, min_Y))**2)
+            self.max_c = max_dist_sq if max_dist_sq > 0 else 1.0
+        else:
+            self.max_c = 1.0
+
+        self.mu_X = np.array(mu_X, dtype=float)
+        self.mu_Y = np.array(mu_Y, dtype=float)
+        self.epsilon = float(epsilon) if epsilon is not None else 1e-3
+        
+        self.assigned_Y = np.zeros(self.N_Y, dtype=float)
+        self.unassigned_X = np.copy(self.mu_X)
+        self.beta_diamond = np.array(initial_beta, dtype=float) if initial_beta is not None else np.zeros(self.N_Y, dtype=float)
+
+        # ---------------------------------------------------------
+        # UNCONDITIONAL OWNERSHIP TRACKING (For both Dense and Sparse)
+        # ---------------------------------------------------------
+        self.owners = [set() for _ in range(self.N_Y)]
+
+        # ---------------------------------------------------------
+        # HYBRID SPARSE STRUCTURES FOR MU AND BETA_TILDE
+        # ---------------------------------------------------------
+        if allowed_edges is not None:
+            self.is_sparse = True
+            nbrs = [[] for _ in range(self.N_X)]
+            for edge in allowed_edges:
+                x, y = int(edge[0]), int(edge[1])
+                nbrs[x].append(y)
+            
+            self.neighbors = [np.array(sorted(set(v)), dtype=int) for v in nbrs]
+            
+            # Parallel arrays: indices match the indices in self.neighbors
+            self.mu_arrs = [np.zeros(len(n), dtype=float) for n in self.neighbors]
+            self.beta_tilde_arrs = [np.zeros(len(n), dtype=float) for n in self.neighbors]
+            
+            self.col_index = [{int(y): i for i, y in enumerate(nbr)} for nbr in self.neighbors]
+            
+        else:
+            self.is_sparse = False
+            self.neighbors = None
+            self.mu_dict = defaultdict(lambda: defaultdict(float))
+            self.beta_tilde_dict = defaultdict(lambda: defaultdict(float))
 
     # --- HELPER FUNCTIONS FOR HYBRID LOOKUPS ---
     
@@ -56,7 +94,6 @@ class AuctionOT:
 
     def _get_active_xs_for_y(self, y):
         """Returns a list of x indices that have mass assigned to y"""
-        # Unconditional O(1) set lookup instead of O(N_X) scan
         return [x for x in self.owners[y] if self._get_mu(x, y) > TOL]
 
     # ---------------------------------------------------------
@@ -158,8 +195,6 @@ class AuctionOT:
                 return 0.0
             
             self._set_mu(x, y, self._get_mu(x, y) + take)
-            
-            # Unconditional ownership update
             self.owners[y].add(x) 
 
             self.assigned_Y[y] += take
@@ -175,7 +210,6 @@ class AuctionOT:
             self._set_mu(owner_xp, y, self._get_mu(owner_xp, y) - take)
             self._set_mu(x, y, self._get_mu(x, y) + take)
             
-            # Unconditional ownership transfer
             if self._get_mu(owner_xp, y) <= TOL:
                 self.owners[y].discard(owner_xp)
             self.owners[y].add(x)
@@ -234,7 +268,6 @@ class AuctionOT:
                 print(f"[AuctionOT] Deadlock at iter {iterations}; unassigned = {total_unassigned:.3e}.")
                 break
 
-        # Reconstruct sparse total cost and output dictionary for compatibility
         out_mu = defaultdict(lambda: defaultdict(float))
         cost = 0.0
         for x in range(self.N_X):
