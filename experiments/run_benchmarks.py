@@ -18,29 +18,21 @@ class SilencePrints:
         sys.stdout.close()
         sys.stdout = self._original_stdout
 
-
 def build_matched_trees(X_pts, Y_pts, max_points_per_cell=8, max_allowed_depth=10):
-    probe_X = HierarchicalPartition(X_pts, max_points_per_cell=max_points_per_cell,
-                                     max_allowed_depth=max_allowed_depth)
-    probe_Y = HierarchicalPartition(Y_pts, max_points_per_cell=max_points_per_cell,
-                                     max_allowed_depth=max_allowed_depth)
+    probe_X = HierarchicalPartition(X_pts, max_points_per_cell=max_points_per_cell, max_allowed_depth=max_allowed_depth)
+    probe_Y = HierarchicalPartition(Y_pts, max_points_per_cell=max_points_per_cell, max_allowed_depth=max_allowed_depth)
 
     target_g = max(probe_X.g, probe_Y.g)
     
-    # Erneuter Aufbau mit gematchter Tiefe
-    tree_X = HierarchicalPartition(X_pts, max_points_per_cell=max_points_per_cell,
-                                   max_allowed_depth=target_g)
-    tree_Y = HierarchicalPartition(Y_pts, max_points_per_cell=max_points_per_cell,
-                                   max_allowed_depth=target_g)
+    tree_X = HierarchicalPartition(X_pts, max_points_per_cell=max_points_per_cell, max_allowed_depth=target_g)
+    tree_Y = HierarchicalPartition(Y_pts, max_points_per_cell=max_points_per_cell, max_allowed_depth=target_g)
     return tree_X, tree_Y
-
 
 def run_comprehensive_benchmarks():
     print("\n================================================================================")
     print("BACHELOR THESIS: OPTIMAL TRANSPORT SOLVER BENCHMARK (WITH PROFESSOR DIAGNOSTICS)")
     print("================================================================================\n")
     
-    # Test-Skalen (N Punkte)
     scales = [16, 32, 64, 128]
     
     for N in scales:
@@ -48,16 +40,13 @@ def run_comprehensive_benchmarks():
         print(f"STARTE DIAGNOSE FÜR SKALA N = {N}")
         print("-" * 80)
         
-        # 1. Daten-Generierung (Gleichmäßige Verteilung im Raum)
-        np.random.seed(42) # Reproduzierbarkeit
+        np.random.seed(42)
         X_pts = np.random.rand(N, 2)
         Y_pts = np.random.rand(N, 2)
         
-        # Generierung von zufälligen Integer-Massen (z.B. zwischen 1 und 5)
         mu_X = np.random.randint(1, 6, size=N)
         mu_Y = np.random.randint(1, 6, size=N)
         
-        # Massen-Ausgleich erzwingen, da OT balanciert sein muss
         diff = np.sum(mu_X) - np.sum(mu_Y)
         if diff > 0:
             mu_Y[0] += diff
@@ -66,22 +55,19 @@ def run_comprehensive_benchmarks():
             
         total_problem_mass = np.sum(mu_X)
         
-        # Originale, unskalierte Distanzmatrix berechnen
+        # Original distance matrix computed ONLY for reference LAP and dense validations
         C = np.zeros((N, N))
         for i in range(N):
             for j in range(N):
                 C[i, j] = np.sum((X_pts[i] - Y_pts[j])**2)
                 
-        # --- BENCHMARK 1: REINES LAP AUCTION (Referenz für 1-zu-1 Matching) ---
         try:
             t0 = time.perf_counter()
             with SilencePrints():
-                # LAP ignoriert Gewichte per Definition
                 lap_solver = AuctionLAP(C)
                 lap_assignment = lap_solver.solve()
             t_lap = time.perf_counter() - t0
             
-            # Rekonstruktion der Matrix aus dem LAP-Vektor für den manuellen Check
             lap_mu = np.zeros_like(C)
             for x, y in enumerate(lap_assignment):
                 if y != -1: lap_mu[x, y] = 1.0
@@ -91,16 +77,20 @@ def run_comprehensive_benchmarks():
         except Exception as e:
             print(f"[LAP Reference]   FEHLGESCHLAGEN")
             
-        # --- BENCHMARK 2: DENSE OT SOLVER ---
         dense_mu = None
         try:
             t1 = time.perf_counter()
             with SilencePrints():
-                dense_manager = EpsScalingManager(AuctionOT, C, mu_X=mu_X, mu_Y=mu_Y)
-                dense_mu, dense_reported_cost, _, _ = dense_manager.solve()
+                dense_manager = EpsScalingManager(AuctionOT, X_pts=X_pts, Y_pts=Y_pts, mu_X=mu_X, mu_Y=mu_Y)
+                dense_mu_dict, dense_reported_cost, _, _ = dense_manager.solve()
             t_dense = time.perf_counter() - t1
             
-            # --- PROFESSOR DIAGNOSTICS FÜR DENSE ---
+            # Reconstruct to dense array ONLY for diagnostics testing
+            dense_mu = np.zeros((N, N))
+            for x in dense_mu_dict:
+                for y, m in dense_mu_dict[x].items():
+                    dense_mu[x, y] = m
+
             manual_dense_cost = np.sum(dense_mu * C)
             actual_dense_mass = np.sum(dense_mu)
             active_dense_pairs = np.sum(dense_mu > 1e-5)
@@ -115,17 +105,21 @@ def run_comprehensive_benchmarks():
             print(f"\n[DENSE OT] FEHLGESCHLAGEN")
             import traceback; traceback.print_exc()
 
-        # --- BENCHMARK 3: HIERARCHICAL MULTISCALE SOLVER ---
         try:
             tree_X, tree_Y = build_matched_trees(X_pts, Y_pts)
 
             t2 = time.perf_counter()
             with SilencePrints():
-                multiscale_solver = HierarchicalMultiscaleSolver(tree_X, tree_Y, C, mu_X, mu_Y)
-                hier_mu = multiscale_solver.solve()
+                # Multiscale directly consumes the matched trees, NOT C
+                multiscale_solver = HierarchicalMultiscaleSolver(tree_X, tree_Y, mu_X, mu_Y)
+                sparse_hier_mu = multiscale_solver.solve()
             t_hier = time.perf_counter() - t2
             
-            # --- PROFESSOR DIAGNOSTICS FÜR HIERARCHICAL ---
+            # Reconstruct dense ONLY for validation checks against Professor metrics
+            hier_mu = np.zeros((N, N))
+            for x, y, mass in sparse_hier_mu:
+                hier_mu[x, y] += mass
+
             manual_hier_cost = np.sum(hier_mu * C)
             actual_hier_mass = np.sum(hier_mu)
             active_hier_pairs = np.sum(hier_mu > 1e-5)
@@ -136,7 +130,6 @@ def run_comprehensive_benchmarks():
             print(f"  -> Transportierte Gesamtmasse:   {actual_hier_mass:.2f} (Soll: {total_problem_mass}) <-- Check 2")
             print(f"  -> Anzahl aktiver Paare (>1e-5): {active_hier_pairs} (Theor. Max: {2*N-1}) <-- Check 1")
             
-            # Direkter struktureller Vergleich der Matrizen
             matrices_identical = np.allclose(dense_mu, hier_mu, atol=1e-3) if dense_mu is not None else False
             print(f"  -> Struktur-Abgleich: Sind Primalpläne identisch? {matrices_identical}")
             
