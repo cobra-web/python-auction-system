@@ -15,7 +15,7 @@ class HierarchicalMultiscaleSolver:
         self.max_depth = max(self.tree_X.max_depth, self.tree_Y.max_depth)
         self.last_N_guess = []
 
-def _build_coarsened_problem(self, depth):
+    def _build_coarsened_problem(self, depth):
         cells_X = self.tree_X.get_active_cells_at_depth(depth)
         cells_Y = self.tree_Y.get_active_cells_at_depth(depth)
 
