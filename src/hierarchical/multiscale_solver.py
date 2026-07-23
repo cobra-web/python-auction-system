@@ -96,6 +96,8 @@ class HierarchicalMultiscaleSolver:
                     current_beta_for_level[i] = final_beta[parent_idx]
 
             iteration_count = 1
+            current_start_eps = None #Loop 1 starts fresh at 0.5
+
             while True:
                 is_final_level = (d + 1 == self.max_depth)
                 level_target_eps = self.target_eps if is_final_level else None
@@ -108,9 +110,12 @@ class HierarchicalMultiscaleSolver:
                     max_c=self.max_c,
                     target_eps=level_target_eps,
                     min_eps=self.min_eps
+                    start_eps=current_start_eps
                 )
                 current_mu, total_cost, total_iters, final_beta = hybrid_manager.solve()
                 current_beta_for_level = final_beta
+
+                current_start_eps = hybrid_manager.target_eps
 
                 ys_by_x = defaultdict(list)
                 for xp, y in N_guess:
