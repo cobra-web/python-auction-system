@@ -1,10 +1,8 @@
 import numpy as np
 
 class EpsScalingManager:
-    """epsilon-scaling driver for the auction OT solver with a safe floor."""
-
     def __init__(self, solver_class, X_pts, Y_pts, mu_X, mu_Y, theta=5.0, target_eps=None,
-                 min_eps=1e-4, initial_beta=None, **solver_kwargs):
+                 min_eps=1e-4, start_eps=None, initial_beta=None, **solver_kwargs):
         self.solver_class = solver_class
         self.X_pts = np.array(X_pts, dtype=float)
         self.Y_pts = np.array(Y_pts, dtype=float)
@@ -24,8 +22,12 @@ class EpsScalingManager:
         else:
             self.target_eps = float(target_eps)
 
-        C_max = 1.0
-        self.start_eps = max(C_max / 2.0, self.target_eps * self.theta)
+        # --- FIX: Support explicit start_eps ---
+        if start_eps is not None:
+            self.start_eps = float(start_eps)
+        else:
+            C_max = 1.0
+            self.start_eps = max(C_max / 2.0, self.target_eps * self.theta)
 
     def solve(self):
         current_eps = self.start_eps
@@ -36,15 +38,9 @@ class EpsScalingManager:
 
         effective_target = max(self.target_eps, self.min_eps)
 
-        print(f"Starting eps-scaling. Start eps: {current_eps:.6e}, "
-              f"Target eps: {self.target_eps:.6e}, Safe Floor: {effective_target:.6e}")
-
         while current_eps >= effective_target:
-            print(f"  -> Solving for eps = {current_eps:.6e}")
-
-            # Intercept and force normalize to True to prevent kwarg clashes 
-            # and guarantee safe epsilon-scaling math.
             safe_kwargs = self.solver_kwargs.copy()
+            # Do NOT override normalize if explicitly passed in kwargs
             if "normalize" not in safe_kwargs:
                 safe_kwargs["normalize"] = True
 
@@ -71,7 +67,6 @@ class EpsScalingManager:
                 break
             current_eps = max(current_eps / self.theta, effective_target)
 
-        print(f"eps-scaling complete in {total_iterations} total iterations.")
         return final_assignment, final_cost, total_iterations, best_beta
 
     def _inject_beta(self, solver, old_beta):
