@@ -22,12 +22,17 @@ class EpsScalingManager:
         else:
             self.target_eps = float(target_eps)
 
-        # --- FIX: Support explicit start_eps ---
+        C_max = 1.0
+        
+        # --- DYNAMIC START EPSILON LOGIC ---
         if start_eps is not None:
             self.start_eps = float(start_eps)
-        else:
-            C_max = 1.0
+        elif self.initial_beta is None:
+            # COLD START: Full ladder from 0.5 down to target_eps
             self.start_eps = max(C_max / 2.0, self.target_eps * self.theta)
+        else:
+            # WARM START: A few repair steps (~3 theta steps) above target_eps
+            self.start_eps = min(C_max / 2.0, self.target_eps * (self.theta ** 3))
 
     def solve(self):
         current_eps = self.start_eps
@@ -38,9 +43,13 @@ class EpsScalingManager:
 
         effective_target = max(self.target_eps, self.min_eps)
 
+        print(f"Starting eps-scaling. Start eps: {current_eps:.6e}, "
+              f"Target eps: {self.target_eps:.6e}, Safe Floor: {effective_target:.6e}")
+
         while current_eps >= effective_target:
+            print(f"  -> Solving for eps = {current_eps:.6e}")
+
             safe_kwargs = self.solver_kwargs.copy()
-            # Do NOT override normalize if explicitly passed in kwargs
             if "normalize" not in safe_kwargs:
                 safe_kwargs["normalize"] = True
 
@@ -67,6 +76,7 @@ class EpsScalingManager:
                 break
             current_eps = max(current_eps / self.theta, effective_target)
 
+        print(f"eps-scaling complete in {total_iterations} total iterations.")
         return final_assignment, final_cost, total_iterations, best_beta
 
     def _inject_beta(self, solver, old_beta):
