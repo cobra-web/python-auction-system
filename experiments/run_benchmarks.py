@@ -5,7 +5,6 @@ import ot
 import numpy as np
 import matplotlib.pyplot as plt
 
-from src.utils.cost_functions import squared_euclidean
 from src.utils.eps_scaling import EpsScalingManager
 from src.core.ot_auction import AuctionOT
 from src.hierarchical.partitions import HierarchicalPartition
@@ -29,14 +28,13 @@ def build_matched_trees(X_pts, Y_pts, max_points_per_cell=1, max_allowed_depth=1
 
 def run_comprehensive_benchmarks():
     print("\n=============================================================================================================")
-    print("BACHELOR THESIS: MULTI-SEED RIGOROUS BENCHMARK (UNIFIED SCALE & TIGHT EPSILON)")
+    print("BACHELOR THESIS: RIGOROUS BENCHMARK (UNIFIED UNITS & DECISIVE SCALING)")
     print("=============================================================================================================\n")
     
-    scales = [16, 32, 64, 128, 256, 512]
-    seeds = [42, 50, 100, 2024, 999]  # 5 distinct runs for statistical significance
+    scales = [16, 32, 64, 128, 256, 512, 1024]
     
     results = {
-        'N': scales,
+        'N': [],
         'dense_time_mean': [], 'dense_time_std': [],
         'hier_time_mean': [], 'hier_time_std': [],
         'dense_gap_mean': [], 'hier_gap_mean': []
@@ -46,6 +44,10 @@ def run_comprehensive_benchmarks():
     print("-" * 73)
 
     for N in scales:
+        # 5 seeds for small N, 3 seeds for large N to optimize runtime
+        num_seeds = 5 if N <= 128 else 3
+        seeds = [42, 50, 100, 2024, 999][:num_seeds]
+
         dense_times, hier_times = [], []
         dense_gaps, hier_gaps = [], []
         
@@ -74,16 +76,14 @@ def run_comprehensive_benchmarks():
             except Exception:
                 continue
 
-            # Build trees for hierarchical solver
             tree_X, tree_Y = build_matched_trees(X_pts, Y_pts)
 
-            # Compute global cost scale for this point cloud pair
             gmin = np.minimum(X_pts.min(axis=0), Y_pts.min(axis=0))
             gmax = np.maximum(X_pts.max(axis=0), Y_pts.max(axis=0))
             GLOBAL_MAX_C = float(np.sum((gmax - gmin) ** 2)) or 1.0
 
             # ---------------------------------------------------------
-            # DENSE OT (Shared Global Scale & Tight Epsilon)
+            # DENSE OT
             # ---------------------------------------------------------
             t1 = time.perf_counter()
             with SilencePrints():
@@ -101,7 +101,7 @@ def run_comprehensive_benchmarks():
             dense_gaps.append(((np.sum(dense_mu * C) - exact_cost) / exact_cost) * 100)
 
             # ---------------------------------------------------------
-            # HIERARCHICAL OT (Shared Global Scale & Tight Epsilon)
+            # HIERARCHICAL OT
             # ---------------------------------------------------------
             t2 = time.perf_counter()
             with SilencePrints():
@@ -116,6 +116,7 @@ def run_comprehensive_benchmarks():
             hier_gaps.append(((hier_cost - exact_cost) / exact_cost) * 100)
 
         # Aggregate Statistics
+        results['N'].append(N)
         results['dense_time_mean'].append(np.mean(dense_times))
         results['dense_time_std'].append(np.std(dense_times))
         results['hier_time_mean'].append(np.mean(hier_times))
@@ -126,15 +127,20 @@ def run_comprehensive_benchmarks():
         print(f"| {N:<4} | {'DENSE OT':<15} | {np.mean(dense_times):<15.4f} | {np.std(dense_times):<15.4f} | {np.mean(dense_gaps):>8.3f}%   |")
         print(f"| {N:<4} | {'HIERARCH. OT':<15} | {np.mean(hier_times):<15.4f} | {np.std(hier_times):<15.4f} | {np.mean(hier_gaps):>8.3f}%   |")
         print("-" * 73)
+        
+        # Save intermediate progress so plots can still be drawn if interrupted
+        plot_results(results)
 
     return results
 
 def plot_results(results):
-    print("\nGenerating PDF plots for thesis...")
-    
-    plt.figure(figsize=(8, 6))
+    if len(results['N']) == 0:
+        return
+        
     N_arr = np.array(results['N'])
     
+    # 1. Log-Log Scaling Plot
+    plt.figure(figsize=(8, 6))
     plt.loglog(N_arr, results['dense_time_mean'], marker='o', label='Dense Auction', linewidth=2)
     plt.loglog(N_arr, results['hier_time_mean'], marker='s', label='Hierarchical Auction', linewidth=2)
     
@@ -147,14 +153,16 @@ def plot_results(results):
                      np.array(results['hier_time_mean']) + np.array(results['hier_time_std']), 
                      alpha=0.2)
     
-    plt.title('Computation Time vs Problem Size', fontsize=14)
+    plt.title('Computation Time vs Problem Size (Log-Log)', fontsize=14)
     plt.xlabel('Number of Points (N)', fontsize=12)
     plt.ylabel('Time (seconds)', fontsize=12)
     plt.grid(True, which="both", ls="--", alpha=0.5)
     plt.legend(fontsize=12)
     plt.tight_layout()
     plt.savefig('thesis_scaling_plot.pdf')
+    plt.close()
     
+    # 2. Gap Convergence Plot
     plt.figure(figsize=(8, 6))
     plt.semilogx(N_arr, results['dense_gap_mean'], marker='o', label='Dense Gap %', linewidth=2)
     plt.semilogx(N_arr, results['hier_gap_mean'], marker='s', label='Hierarchical Gap %', linewidth=2)
@@ -166,8 +174,7 @@ def plot_results(results):
     plt.legend(fontsize=12)
     plt.tight_layout()
     plt.savefig('thesis_gap_plot.pdf')
-    print("Saved 'thesis_scaling_plot.pdf' and 'thesis_gap_plot.pdf' to disk.")
+    plt.close()
 
 if __name__ == "__main__":
     final_results = run_comprehensive_benchmarks()
-    plot_results(final_results)
