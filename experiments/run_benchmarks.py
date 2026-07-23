@@ -27,9 +27,7 @@ def build_matched_trees(X_pts, Y_pts, max_points_per_cell=1, max_allowed_depth=1
     return tree_X, tree_Y
 
 def run_comprehensive_benchmarks():
-    print("\n=============================================================================================================")
-    print("BACHELOR THESIS: RIGOROUS BENCHMARK (UNIFIED UNITS & DECISIVE SCALING)")
-    print("=============================================================================================================\n")
+    print("BACHELOR THESIS: Accelerating Optimal Transport")
     
     scales = [16, 32, 64, 128, 256, 512, 1024]
     
