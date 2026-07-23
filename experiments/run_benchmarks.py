@@ -14,22 +14,16 @@ from src.core.ot_auction import AuctionOT
 from src.hierarchical.partitions import HierarchicalPartition
 from src.hierarchical.multiscale_solver import HierarchicalMultiscaleSolver
 
-
-# ---------------------------------------------------------------------------
-# Configuration
-# ---------------------------------------------------------------------------
-
 SCALES = [16, 32, 64, 128, 256, 512, 1024]
 
-# Fewer seeds at the large sizes so a full sweep actually finishes.
 SEEDS_BY_N = {
-    16:   [42, 50, 100, 2024, 999],
-    32:   [42, 50, 100, 2024, 999],
-    64:   [42, 50, 100, 2024, 999],
-    128:  [42, 50, 100, 2024, 999],
-    256:  [42, 50, 100],
-    512:  [42, 50, 100],
-    1024: [42, 50, 100],
+    16:   [40, 50, 100, 2024, 999],
+    32:   [40, 50, 100, 2024, 999],
+    64:   [40, 50, 100, 2024, 999],
+    128:  [40, 50, 100, 2024, 999],
+    256:  [40, 50, 100],
+    512:  [40, 50, 100],
+    1024: [40, 50, 100],
 }
 
 CSV_PATH = "benchmark_results.csv"
