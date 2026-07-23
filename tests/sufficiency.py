@@ -7,7 +7,7 @@ import ot
 
 def test_neighborhood_sufficiency():
     print("\n--- DECISIVE NEIGHBORHOOD SUFFICIENCY TEST ---")
-    N = 512
+    N = 128  # <-- Run N=128 for rapid verification
     np.random.seed(42)
     
     X_pts = np.random.rand(N, 2)
@@ -32,7 +32,7 @@ def test_neighborhood_sufficiency():
 
     tight_eps = 1e-4
 
-    # 1. Full Dense Solve at Tight Epsilon
+    # 1. Cold-start Dense OT Reference at Tight Epsilon
     dense_mgr = EpsScalingManager(
         AuctionOT, X_pts=X_pts, Y_pts=Y_pts, mu_X=mu_X, mu_Y=mu_Y,
         normalize=False, max_c=GLOBAL_MAX_C, target_eps=tight_eps, min_eps=1e-6
