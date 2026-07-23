@@ -6,7 +6,7 @@ from src.hierarchical.multiscale_solver import HierarchicalMultiscaleSolver
 import ot
 
 def test_neighborhood_sufficiency():
-    print("\n--- DECISIVE NEIGHBORHOOD SUFFICIENCY TEST ---")
+    print("\nSufficiency Test")
     N = 128  # <-- Run N=128 for rapid verification
     np.random.seed(42)
     
