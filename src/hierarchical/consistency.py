@@ -1,12 +1,11 @@
 import numpy as np
 
 class ConsistencyChecker:
-    def __init__(self, tree_X, tree_Y, initial_sparse_N):
+    def __init__(self, tree_X, tree_Y, initial_sparse_N=None, max_c=1.0):
         self.tree_X = tree_X
         self.tree_Y = tree_Y
-        self.N_set = set(initial_sparse_N)
-        self.alpha_prime_hat = {}
-        self.beta_hat = {}
+        self.max_c = float(max_c)
+        self.N_set = set(initial_sparse_N) if initial_sparse_N is not None else set()
         self.c_hat_cache = {}
 
     def _compute_extensions(self, alpha_prime, beta, target_depth):
@@ -64,8 +63,9 @@ class ConsistencyChecker:
         cache_key = (cell_a.id, cell_b.id)
         if cache_key in self.c_hat_cache:
             return self.c_hat_cache[cache_key]
-
-        val = self._bbox_min_sq_dist(cell_a.bbox, cell_b.bbox)
+        
+        # --- FIX: Divide by self.max_c to match normalized solver units ---
+        val = self._bbox_min_sq_dist(cell_a.bbox, cell_b.bbox) / self.max_c
         self.c_hat_cache[cache_key] = val
         return val
 
