@@ -51,7 +51,8 @@ def test_neighborhood_sufficiency():
 
     # 2. Build Matched Trees & Solve Hierarchical
     print("\n--- Extracting Neighborhood via Hierarchical Solver ---")
-    tree_X, tree_Y = build_matched_trees(X_pts, Y_pts, max_points_per_cell=1)
+    tree_X = HierarchicalPartition(X_pts, max_points_per_cell=1, max_allowed_depth=15)
+    tree_Y = HierarchicalPartition(Y_pts, max_points_per_cell=1, max_allowed_depth=15)
     
     hier_solver = HierarchicalMultiscaleSolver(
         tree_X, tree_Y, mu_X, mu_Y, 
