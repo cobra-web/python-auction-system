@@ -109,7 +109,7 @@ class HierarchicalMultiscaleSolver:
                     normalize=False,
                     max_c=self.max_c,
                     target_eps=level_target_eps,
-                    min_eps=self.min_eps
+                    min_eps=self.min_eps,
                     start_eps=current_start_eps
                 )
                 current_mu, total_cost, total_iters, final_beta = hybrid_manager.solve()
