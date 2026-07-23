@@ -75,7 +75,8 @@ class HierarchicalMultiscaleSolver:
         )
         current_mu, _, _, final_beta = manager.solve()
 
-        checker = ConsistencyChecker(self.tree_X, self.tree_Y, initial_sparse_N=[])
+        # Instantiate checker with the shared global scale
+        checker = ConsistencyChecker(self.tree_X, self.tree_Y, initial_sparse_N=[], max_c=self.max_c)
 
         # Top-down loop
         for d in range(0, self.max_depth):
@@ -119,7 +120,8 @@ class HierarchicalMultiscaleSolver:
                 for x in range(len(f_mu_X)):
                     valid_ys = ys_by_x[x]
                     if len(valid_ys) > 0:
-                        min_dists = [checker._bbox_min_sq_dist(fX[x].bbox, fY[y].bbox) for y in valid_ys]
+                        # --- FIX: Normalize bounding box distances to match solver scale ---
+                        min_dists = [checker._bbox_min_sq_dist(fX[x].bbox, fY[y].bbox) / self.max_c for y in valid_ys]
                         alpha[x] = np.min(np.array(min_dists) - final_beta[valid_ys])
                     else:
                         alpha[x] = 0.0
