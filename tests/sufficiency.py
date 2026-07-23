@@ -5,7 +5,7 @@ from scipy.sparse.csgraph import maximum_flow
 
 from src.core.ot_auction import AuctionOT
 from src.utils.eps_scaling import EpsScalingManager
-from src.hierarchical.partitions import build_matched_trees
+from src.hierarchical.partitions import HierarchicalPartition
 from src.hierarchical.multiscale_solver import HierarchicalMultiscaleSolver
 import ot
 
