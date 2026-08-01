@@ -29,18 +29,8 @@ SEEDS_BY_N = {
 CSV_PATH = "benchmark_results.csv"
 
 
-# ---------------------------------------------------------------------------
-# Output suppression
-# ---------------------------------------------------------------------------
-
 class Silence:
-    """
-    Suppress stdout AND stderr.
 
-    The eps-scaling manager prints to stdout, the multiscale solver writes its
-    depth and loop diagnostics to stderr. Silencing only stdout leaves the
-    [Depth N] lines in the table, which is why the old benchmark was noisy.
-    """
 
     def __enter__(self):
         self._devnull = open(os.devnull, "w")
@@ -55,9 +45,6 @@ class Silence:
         return False
 
 
-# ---------------------------------------------------------------------------
-# Problem setup
-# ---------------------------------------------------------------------------
 
 def build_matched_trees(X_pts, Y_pts, max_points_per_cell=1, max_allowed_depth=15):
     probe_X = HierarchicalPartition(X_pts, max_points_per_cell=max_points_per_cell,
@@ -95,10 +82,6 @@ def make_instance(N, seed):
 
     return X_pts, Y_pts, mu_X, mu_Y, C, global_max_c
 
-
-# ---------------------------------------------------------------------------
-# Benchmark
-# ---------------------------------------------------------------------------
 
 def run_benchmarks():
     header = (f"| {'N':<5} | {'Method':<13} | {'Time Mean':>10} | {'Time Std':>9} "
