@@ -239,10 +239,6 @@ def print_summary(results):
     print(f"Results written to {CSV_PATH}")
 
 
-# ---------------------------------------------------------------------------
-# Plots
-# ---------------------------------------------------------------------------
-
 def plot_results(results):
     if len(results["N"]) < 2:
         return
