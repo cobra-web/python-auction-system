@@ -100,7 +100,7 @@ class HierarchicalMultiscaleSolver:
 
             while True:
                 is_final_level = (d + 1 == self.max_depth)
-                level_target_eps = self.target_eps if is_final_level else None
+                level_target_eps = self.target_eps
                 
                 hybrid_manager = EpsScalingManager(
                     AuctionOT, X_pts=fX_pts, Y_pts=fY_pts, mu_X=f_mu_X, mu_Y=f_mu_Y, 
