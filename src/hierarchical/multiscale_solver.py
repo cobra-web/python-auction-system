@@ -132,7 +132,7 @@ class HierarchicalMultiscaleSolver:
                         alpha[x] = 0.0
 
                 target_eps = hybrid_manager.target_eps
-                alpha_prime = alpha + target_eps
+                alpha_prime = alpha + self.target_eps
 
                 prev_len = len(checker.N_set)
                 checker.run_consistency_check(alpha_prime, final_beta, target_depth=d+1)
