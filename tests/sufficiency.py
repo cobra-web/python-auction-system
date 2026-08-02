@@ -126,6 +126,11 @@ def test_neighborhood_sufficiency():
         print(f"  Sample missing edges (x, y, mass):")
         for x, y in missing[:5]:
             print(f"    ({x}, {y})  mass={dense_mu[x,y]:.4f}  cost={C[x,y]:.6f}")
+
+
+    for x, y in missing[:5]:
+    print(f"  C[{x},{y}]={C[x,y]:.6f}  normalized={C[x,y]/GLOBAL_MAX_C:.6f}  "
+          f"beta_dense_y={sum(dense_mu[xp,y]*C[xp,y] for xp in range(N)):.6f}")
     
     print("\n" + "="*50)
     print(f"[Dense OT Gap @ eps={tight_eps}]:      {dense_gap:.4f}%")
