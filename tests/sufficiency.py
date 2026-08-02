@@ -70,32 +70,37 @@ def test_neighborhood_sufficiency():
     final_edges = [(final_X[i].point_indices[0], final_Y[j].point_indices[0])
                    for (i, j) in final_edges_cells]
 
-    # --- FIX 2: Bipartite Graph Feasibility Guard via Max Flow ---
-    total_mass = np.sum(mu_X)
-    # Graph structure: Source (0) -> X_nodes (1..N) -> Y_nodes (N+1..2N) -> Sink (2N+1)
+    # --- Bipartite Graph Feasibility Guard via Max Flow ---
+    total_mass = int(np.round(np.sum(mu_X)))
+    int_mu_X = np.round(mu_X).astype(int)
+    int_mu_Y = np.round(mu_Y).astype(int)
+
     source, sink = 0, 2 * N + 1
     row_ind, col_ind, data = [], [], []
 
+    # Source -> X supply nodes
     for i in range(N):
         row_ind.append(source)
         col_ind.append(i + 1)
-        data.append(mu_X[i])
+        data.append(int(int_mu_X[i]))
 
+    # X supply nodes -> Y demand nodes (admissible edges from hierarchy)
     for x, y in final_edges:
         row_ind.append(x + 1)
         col_ind.append(N + 1 + y)
         data.append(total_mass)
 
+    # Y demand nodes -> Sink
     for j in range(N):
         row_ind.append(N + 1 + j)
         col_ind.append(sink)
-        data.append(mu_Y[j])
+        data.append(int(int_mu_Y[j]))
 
-    capacity_matrix = csr_matrix((data, (row_ind, col_ind)), shape=(2 * N + 2, 2 * N + 2))
+    capacity_matrix = csr_matrix((data, (row_ind, col_ind)), shape=(2 * N + 2, 2 * N + 2), dtype=int)
     flow_result = maximum_flow(capacity_matrix, source, sink)
 
-    print(f"Graph Capacity Check: Max Flow = {flow_result.flow_value:.2f} / Total Mass = {total_mass:.2f}")
-    assert np.isclose(flow_result.flow_value, total_mass), "INFEASIBLE NEIGHBORHOOD: Max flow < total mass!"
+    print(f"\nGraph Capacity Check: Max Flow = {flow_result.flow_value} / Total Mass = {total_mass}")
+    assert flow_result.flow_value == total_mass, f"INFEASIBLE NEIGHBORHOOD: Max flow ({flow_result.flow_value}) < total mass ({total_mass})"
 
     # 3. Solve Single-Level OT on Extracted Point Neighborhood
     print("\n--- Running Restricted Sparse Solve on Extracted Graph ---")
