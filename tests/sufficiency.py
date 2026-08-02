@@ -117,10 +117,15 @@ def test_neighborhood_sufficiency():
     sparse_gap = ((np.sum(sparse_mu * C) - exact_cost) / exact_cost) * 100
 
     
+    final_edges_set = set(final_edges)
     missing = [(x, y) for x in range(N) for y in range(N)
            if dense_mu[x, y] > 1e-6
-           and (x, y) not in set(final_edges)]
+           and (x, y) not in final_edges_set]
     print(f"Optimal edges missing from neighborhood: {len(missing)}")
+    if missing:
+        print(f"  Sample missing edges (x, y, mass):")
+        for x, y in missing[:5]:
+            print(f"    ({x}, {y})  mass={dense_mu[x,y]:.4f}  cost={C[x,y]:.6f}")
     
     print("\n" + "="*50)
     print(f"[Dense OT Gap @ eps={tight_eps}]:      {dense_gap:.4f}%")
