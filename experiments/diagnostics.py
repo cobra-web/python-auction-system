@@ -147,5 +147,47 @@ def t1b(N=32, seed=40, eps=1e-3, top=5):
               f" y* full={s.assigned_Y[yb] >= s.mu_Y[yb] - TOL} eff beta*={beta[yb]:.4f}")
 
 
+def t1c(N=32, seed=40, eps=1e-3):
+    X, Y, mu_X, mu_Y, C, cmax = make_instance(N, seed)
+    Cn = C / cmax
+    s = AuctionOT(X, Y, mu_X, mu_Y, epsilon=eps, normalize=False, max_c=cmax)
+    st = {"log": [], "prev_x": None, "done": False}
+    orig_place, orig_slots = s._place, s._sorted_slots
+
+    def place(x, y, owner_xp, amount, nbt):
+        got = orig_place(x, y, owner_xp, amount, nbt)
+        if got > 0:
+            st["log"].append((x, y, int(owner_xp), round(got, 4), round(nbt, 5)))
+            st["prev_x"] = x
+        return got
+
+    def slots(x):
+        if not st["done"] and st["log"]:
+            P = np.array([[s._get_mu(a, b) for b in range(N)] for a in range(N)])
+            beta = s.get_effective_beta()
+            net = Cn - beta[None, :]
+            best = net.min(axis=1)
+            viol = np.where(P > TOL, net - best[:, None] - eps, -np.inf)
+            if viol.max() > 1e-7:
+                st["done"] = True
+                bx, by = np.unravel_index(np.argmax(viol), viol.shape)
+                print(f"FIRST VIOLATION before buyer x={x}'s turn, previous bidder = {st['prev_x']}")
+                print(f"  violating pair x={bx} y={by}: viol={viol[bx, by]:.3e}")
+                print(f"  placements of previous bidder (x, y, owner_xp, amount, new_btilde):")
+                for rec in st["log"]:
+                    print("   ", rec, f" implied alpha' = {Cn[rec[0], rec[1]] - rec[4] - eps:.5f}")
+                yb = int(np.argmin(net[bx]))
+                print(f"  best target y*={yb}: eff beta={beta[yb]:.5f}, "
+                      f"owners={[(o, round(s._get_beta_tilde(o, yb), 5)) for o in s._get_active_xs_for_y(yb)]}")
+                print(f"  used target y={by}: btilde(x,y)={s._get_beta_tilde(bx, by):.5f}, eff beta={beta[by]:.5f}")
+            st["log"] = []
+        return orig_slots(x)
+
+    s._place, s._sorted_slots = place, slots
+    s.solve()
+    if not st["done"]:
+        print("eps-CS held before every turn; the violation appears only after the last bid.")
+
+
 if __name__ == "__main__":
-    {"t1": t1, "t1b": t1b, "t2": t2, "t3": t3, "t4": t4}[sys.argv[1]]()
+    {"t1": t1, "t1b": t1b, "t1c": t1c, "t2": t2, "t3": t3, "t4": t4}[sys.argv[1]]()
