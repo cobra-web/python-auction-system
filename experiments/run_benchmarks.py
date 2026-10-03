@@ -15,7 +15,7 @@ from src.core.ot_auction import AuctionOT
 from src.hierarchical.partitions import HierarchicalPartition
 from src.hierarchical.multiscale_solver import HierarchicalMultiscaleSolver
 
-SCALES = [16, 32, 64, 128, 256, 512, 1024]
+SCALES = [16, 32, 64, 128, 256, 512, 1024, 2048, 6000]
 
 SEEDS_BY_N = {
     16:   [40, 50, 100, 2024, 999],
