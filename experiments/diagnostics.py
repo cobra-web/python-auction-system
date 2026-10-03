@@ -16,7 +16,7 @@ import ot
 from src.core.ot_auction import AuctionOT
 from src.utils.eps_scaling import EpsScalingManager
 from src.hierarchical.multiscale_solver import HierarchicalMultiscaleSolver
-from run_benchmarks import make_instance, build_matched_trees
+from experiments.run_benchmarks import make_instance, build_matched_trees
 
 TOL = 1e-7
 
