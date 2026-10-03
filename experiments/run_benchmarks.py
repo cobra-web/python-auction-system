@@ -2,6 +2,7 @@ import csv
 import os
 import sys
 import time
+import traceback
 
 import numpy as np
 import matplotlib
@@ -26,12 +27,17 @@ SEEDS_BY_N = {
     1024: [40, 50, 100],
 }
 
+# eps = ACCURACY / M with M the total mass. A final eps-CS plan satisfies
+#   cost <= OPT + M * eps * max_c = OPT + ACCURACY * max_c      (raw cost units).
+# The relative gap against POT therefore stays far below 1 percent. A larger eps is faster but
+# the gap is then only bounded, not close to zero.
+ACCURACY = 1e-3
+MARGINAL_TOL = 1e-6
+
 CSV_PATH = "benchmark_results.csv"
 
 
 class Silence:
-
-
     def __enter__(self):
         self._devnull = open(os.devnull, "w")
         self._stdout, self._stderr = sys.stdout, sys.stderr
@@ -45,17 +51,12 @@ class Silence:
         return False
 
 
-
-def build_matched_trees(X_pts, Y_pts, max_points_per_cell=1, max_allowed_depth=15):
-    probe_X = HierarchicalPartition(X_pts, max_points_per_cell=max_points_per_cell,
-                                    max_allowed_depth=max_allowed_depth)
-    probe_Y = HierarchicalPartition(Y_pts, max_points_per_cell=max_points_per_cell,
-                                    max_allowed_depth=max_allowed_depth)
-    target_depth = max(probe_X.max_depth, probe_Y.max_depth)
+def build_matched_trees(X_pts, Y_pts, max_points_per_cell=1, max_allowed_depth=30):
+    """Both trees with leaves of one point (required by the hierarchical solver)."""
     tree_X = HierarchicalPartition(X_pts, max_points_per_cell=max_points_per_cell,
-                                   max_allowed_depth=target_depth)
+                                   max_allowed_depth=max_allowed_depth)
     tree_Y = HierarchicalPartition(Y_pts, max_points_per_cell=max_points_per_cell,
-                                   max_allowed_depth=target_depth)
+                                   max_allowed_depth=max_allowed_depth)
     return tree_X, tree_Y
 
 
@@ -83,122 +84,124 @@ def make_instance(N, seed):
     return X_pts, Y_pts, mu_X, mu_Y, C, global_max_c
 
 
+def marginal_error(plan_dense, mu_X, mu_Y):
+    return max(float(np.abs(plan_dense.sum(1) - mu_X).max()),
+               float(np.abs(plan_dense.sum(0) - mu_Y).max()))
+
+
 def run_benchmarks():
     header = (f"| {'N':<5} | {'Method':<13} | {'Time Mean':>10} | {'Time Std':>9} "
-              f"| {'Gap Mean':>9} | {'Gap Std':>8} | {'Seeds':>5} |")
+              f"| {'Gap Mean':>9} | {'Gap Std':>8} | {'Seeds':>5} | {'Fail':>4} |")
     rule = "-" * len(header)
 
     print()
     print("BACHELOR THESIS: OPTIMAL TRANSPORT SOLVER BENCHMARK")
+    print(f"accuracy parameter: eps = {ACCURACY:g} / M   (cost <= OPT + {ACCURACY:g} * max_c)")
     print(rule)
     print(header)
     print(rule)
 
-    results = {
-        "N": [],
-        "dense_time_mean": [], "dense_time_std": [],
-        "hier_time_mean": [], "hier_time_std": [],
-        "dense_gap_mean": [], "dense_gap_std": [],
-        "hier_gap_mean": [], "hier_gap_std": [],
-    }
+    keys = ["pot_time", "dense_time", "hier_time", "dense_gap", "hier_gap"]
+    results = {"N": []}
+    for k in keys:
+        results[k + "_mean"] = []
+        results[k + "_std"] = []
 
     with open(CSV_PATH, "w", newline="") as fh:
-        writer = csv.writer(fh)
-        writer.writerow([
-            "N", "seeds",
-            "dense_time_mean", "dense_time_std", "dense_gap_mean", "dense_gap_std",
-            "hier_time_mean", "hier_time_std", "hier_gap_mean", "hier_gap_std",
-        ])
+        csv.writer(fh).writerow(
+            ["N", "seeds", "failures"]
+            + [f"{k}_{s}" for k in keys for s in ("mean", "std")])
 
     for N in SCALES:
         seeds = SEEDS_BY_N.get(N, [42, 50, 100])
-        dense_times, hier_times = [], []
-        dense_gaps, hier_gaps = [], []
-
-        tight_target = 0.5 / (N + 1)
-        tight_min = 1e-5
+        data = {k: [] for k in keys}
+        failures = 0
 
         for seed in seeds:
             X_pts, Y_pts, mu_X, mu_Y, C, global_max_c = make_instance(N, seed)
+            M = float(mu_X.sum())
+            target = ACCURACY / M
 
             try:
-                exact_cost = ot.emd2(mu_X, mu_Y, C)
+                # POT reference, timed including its own cost matrix
+                t0 = time.perf_counter()
+                C_pot = ot.dist(X_pts, Y_pts, metric="sqeuclidean")
+                exact_cost = float(ot.emd2(mu_X, mu_Y, C_pot))
+                pot_time = time.perf_counter() - t0
+
+                # Dense auction with eps-scaling
+                t0 = time.perf_counter()
+                with Silence():
+                    dense_mgr = EpsScalingManager(
+                        AuctionOT, X_pts=X_pts, Y_pts=Y_pts, mu_X=mu_X, mu_Y=mu_Y,
+                        normalize=False, max_c=global_max_c, target_eps=target)
+                    dense_mu, _, _, _ = dense_mgr.solve()
+                dense_time = time.perf_counter() - t0
+
+                P = np.zeros((N, N))
+                for x in dense_mu:
+                    for y, m in dense_mu[x].items():
+                        P[x, y] = m
+                if marginal_error(P, mu_X, mu_Y) > MARGINAL_TOL:
+                    raise RuntimeError("dense plan violates the marginals")
+                dense_cost = float((P * C).sum())
+
+                # Hierarchical auction; tree construction is part of the timed work
+                t0 = time.perf_counter()
+                with Silence():
+                    tree_X, tree_Y = build_matched_trees(X_pts, Y_pts)
+                    hier_solver = HierarchicalMultiscaleSolver(
+                        tree_X, tree_Y, mu_X, mu_Y, max_c=global_max_c, target_eps=target)
+                    plan = hier_solver.solve()
+                hier_time = time.perf_counter() - t0
+
+                Ph = np.zeros((N, N))
+                for x, y, m in plan:
+                    Ph[x, y] += m
+                if marginal_error(Ph, mu_X, mu_Y) > MARGINAL_TOL:
+                    raise RuntimeError("hierarchical plan violates the marginals")
+                hier_cost = float((Ph * C).sum())
+
             except Exception:
+                failures += 1
+                print(f"[N={N}, seed={seed}] FAILED:", file=sys.__stderr__)
+                traceback.print_exc(file=sys.__stderr__)
                 continue
 
-            tree_X, tree_Y = build_matched_trees(X_pts, Y_pts)
+            data["pot_time"].append(pot_time)
+            data["dense_time"].append(dense_time)
+            data["hier_time"].append(hier_time)
+            data["dense_gap"].append((dense_cost - exact_cost) / exact_cost * 100.0)
+            data["hier_gap"].append((hier_cost - exact_cost) / exact_cost * 100.0)
 
-            # Dense baseline
-            t0 = time.perf_counter()
-            with Silence():
-                dense_mgr = EpsScalingManager(
-                    AuctionOT, X_pts=X_pts, Y_pts=Y_pts, mu_X=mu_X, mu_Y=mu_Y,
-                    normalize=False, max_c=global_max_c,
-                    target_eps=tight_target, min_eps=tight_min,
-                )
-                dense_mu_dict, _, _, _ = dense_mgr.solve()
-            dense_times.append(time.perf_counter() - t0)
-
-            dense_cost = 0.0
-            for x in dense_mu_dict:
-                for y, m in dense_mu_dict[x].items():
-                    dense_cost += m * C[x, y]
-            dense_gaps.append((dense_cost - exact_cost) / exact_cost * 100.0)
-
-            # Hierarchical solver
-            t1 = time.perf_counter()
-            with Silence():
-                hier_solver = HierarchicalMultiscaleSolver(
-                    tree_X, tree_Y, mu_X, mu_Y,
-                    max_c=global_max_c,
-                    target_eps=tight_target, min_eps=tight_min,
-                )
-                sparse_hier_mu = hier_solver.solve()
-            hier_times.append(time.perf_counter() - t1)
-
-            hier_cost = sum(mass * C[x, y] for x, y, mass in sparse_hier_mu)
-            hier_gaps.append((hier_cost - exact_cost) / exact_cost * 100.0)
-
-        if not dense_times:
-            print(f"| {N:<5} | {'SKIPPED':<13} | {'':>10} | {'':>9} | {'':>9} | {'':>8} | {0:>5} |")
+        n_ok = len(data["dense_time"])
+        if n_ok == 0:
+            print(f"| {N:<5} | {'ALL FAILED':<13} | {'':>10} | {'':>9} | {'':>9} | {'':>8} "
+                  f"| {0:>5} | {failures:>4} |")
             print(rule)
             continue
 
-        # ddof=1 gives the sample standard deviation, which is what you want
-        # with three to five seeds.
-        ddof = 1 if len(dense_times) > 1 else 0
-        row = {
-            "dense_time_mean": float(np.mean(dense_times)),
-            "dense_time_std": float(np.std(dense_times, ddof=ddof)),
-            "dense_gap_mean": float(np.mean(dense_gaps)),
-            "dense_gap_std": float(np.std(dense_gaps, ddof=ddof)),
-            "hier_time_mean": float(np.mean(hier_times)),
-            "hier_time_std": float(np.std(hier_times, ddof=ddof)),
-            "hier_gap_mean": float(np.mean(hier_gaps)),
-            "hier_gap_std": float(np.std(hier_gaps, ddof=ddof)),
-        }
+        ddof = 1 if n_ok > 1 else 0
+        row = {}
+        for k in keys:
+            row[k + "_mean"] = float(np.mean(data[k]))
+            row[k + "_std"] = float(np.std(data[k], ddof=ddof))
 
         results["N"].append(N)
         for key, value in row.items():
             results[key].append(value)
 
-        print(f"| {N:<5} | {'DENSE OT':<13} | {row['dense_time_mean']:>10.4f} "
-              f"| {row['dense_time_std']:>9.4f} | {row['dense_gap_mean']:>8.3f}% "
-              f"| {row['dense_gap_std']:>7.3f}% | {len(dense_times):>5} |")
-        print(f"| {N:<5} | {'HIERARCH. OT':<13} | {row['hier_time_mean']:>10.4f} "
-              f"| {row['hier_time_std']:>9.4f} | {row['hier_gap_mean']:>8.3f}% "
-              f"| {row['hier_gap_std']:>7.3f}% | {len(hier_times):>5} |")
+        for label, k in (("POT EMD", "pot"), ("DENSE OT", "dense"), ("HIERARCH. OT", "hier")):
+            gap_m = f"{row[k + '_gap_mean']:>8.4f}%" if k != "pot" else f"{'-':>9}"
+            gap_s = f"{row[k + '_gap_std']:>7.4f}%" if k != "pot" else f"{'-':>8}"
+            print(f"| {N:<5} | {label:<13} | {row[k + '_time_mean']:>10.4f} "
+                  f"| {row[k + '_time_std']:>9.4f} | {gap_m} | {gap_s} | {n_ok:>5} | {failures:>4} |")
         print(rule)
 
-        # Checkpoint after every N so a Ctrl+C does not lose the whole sweep.
         with open(CSV_PATH, "a", newline="") as fh:
-            csv.writer(fh).writerow([
-                N, len(dense_times),
-                row["dense_time_mean"], row["dense_time_std"],
-                row["dense_gap_mean"], row["dense_gap_std"],
-                row["hier_time_mean"], row["hier_time_std"],
-                row["hier_gap_mean"], row["hier_gap_std"],
-            ])
+            csv.writer(fh).writerow(
+                [N, n_ok, failures]
+                + [row[k + "_" + s] for k in keys for s in ("mean", "std")])
 
     print_summary(results)
     return results
@@ -209,33 +212,31 @@ def print_summary(results):
         return
 
     N_arr = np.array(results["N"], dtype=float)
-    dense = np.array(results["dense_time_mean"])
-    hier = np.array(results["hier_time_mean"])
+    series = {name: np.array(results[name + "_time_mean"])
+              for name in ("pot", "dense", "hier")}
 
     print()
     print("SCALING SUMMARY")
-    line = f"| {'N':<5} | {'hier/dense':>10} | {'dense slope':>11} | {'hier slope':>10} |"
+    line = (f"| {'N':<5} | {'hier/dense':>10} | {'pot slope':>9} | {'dense slope':>11} "
+            f"| {'hier slope':>10} |")
     print("-" * len(line))
     print(line)
     print("-" * len(line))
 
     for i, N in enumerate(results["N"]):
-        ratio = hier[i] / dense[i]
+        ratio = series["hier"][i] / series["dense"][i]
         if i == 0:
-            d_slope = h_slope = ""
+            slopes = ["", "", ""]
         else:
             step = np.log(N_arr[i] / N_arr[i - 1])
-            d_slope = f"{np.log(dense[i] / dense[i - 1]) / step:>11.2f}"
-            h_slope = f"{np.log(hier[i] / hier[i - 1]) / step:>10.2f}"
-        print(f"| {N:<5} | {ratio:>10.2f} | {d_slope:>11} | {h_slope:>10} |")
+            slopes = [f"{np.log(series[n][i] / series[n][i - 1]) / step:.2f}"
+                      for n in ("pot", "dense", "hier")]
+        print(f"| {N:<5} | {ratio:>10.2f} | {slopes[0]:>9} | {slopes[1]:>11} | {slopes[2]:>10} |")
 
     print("-" * len(line))
-
-    # Overall fitted exponents across the whole sweep.
-    d_fit = np.polyfit(np.log(N_arr), np.log(dense), 1)[0]
-    h_fit = np.polyfit(np.log(N_arr), np.log(hier), 1)[0]
-    print(f"Fitted exponent, dense:        N^{d_fit:.2f}")
-    print(f"Fitted exponent, hierarchical: N^{h_fit:.2f}")
+    for name, label in (("pot", "POT"), ("dense", "dense"), ("hier", "hierarchical")):
+        fit = np.polyfit(np.log(N_arr), np.log(series[name]), 1)[0]
+        print(f"Fitted exponent, {label}: N^{fit:.2f}")
     print(f"Results written to {CSV_PATH}")
 
 
@@ -246,14 +247,13 @@ def plot_results(results):
     N_arr = np.array(results["N"], dtype=float)
 
     plt.figure(figsize=(8, 6))
-    for key_mean, key_std, label, marker in [
-        ("dense_time_mean", "dense_time_std", "Dense Auction", "o"),
-        ("hier_time_mean", "hier_time_std", "Hierarchical Auction", "s"),
-    ]:
-        mean = np.array(results[key_mean])
-        std = np.array(results[key_std])
+    for name, label, marker in [("pot", "POT (EMD)", "^"),
+                                ("dense", "Dense Auction", "o"),
+                                ("hier", "Hierarchical Auction", "s")]:
+        mean = np.array(results[name + "_time_mean"])
+        std = np.array(results[name + "_time_std"])
         plt.loglog(N_arr, mean, marker=marker, label=label, linewidth=2)
-        plt.fill_between(N_arr, mean - std, mean + std, alpha=0.2)
+        plt.fill_between(N_arr, np.maximum(mean - std, 1e-9), mean + std, alpha=0.2)
 
     plt.title("Computation Time vs Problem Size")
     plt.xlabel("Number of Points (N)")
@@ -265,12 +265,9 @@ def plot_results(results):
     plt.close()
 
     plt.figure(figsize=(8, 6))
-    for key_mean, key_std, label, marker in [
-        ("dense_gap_mean", "dense_gap_std", "Dense", "o"),
-        ("hier_gap_mean", "hier_gap_std", "Hierarchical", "s"),
-    ]:
-        mean = np.array(results[key_mean])
-        std = np.array(results[key_std])
+    for name, label, marker in [("dense", "Dense", "o"), ("hier", "Hierarchical", "s")]:
+        mean = np.array(results[name + "_gap_mean"])
+        std = np.array(results[name + "_gap_std"])
         plt.semilogx(N_arr, mean, marker=marker, label=label, linewidth=2)
         plt.fill_between(N_arr, mean - std, mean + std, alpha=0.2)
 
