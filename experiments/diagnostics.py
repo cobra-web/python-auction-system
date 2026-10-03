@@ -1,0 +1,122 @@
+"""
+diagnostics.py
+Run ONE check at a time from the repo root (same folder as run_benchmarks.py):
+
+    python diagnostics.py t1      # effective beta + eps-CS of the dense auction
+    python diagnostics.py t2      # marginals of dense and hierarchical plans
+    python diagnostics.py t3      # cost gap vs ot.emd2 for leaf size k = 1 and k = 8
+    python diagnostics.py t4      # eps-CS of the final multiscale plan on the FULL matrix
+
+All costs are checked in the solver's normalised units: C / global_max_c.
+"""
+import sys
+import numpy as np
+import ot
+
+from src.core.ot_auction import AuctionOT
+from src.utils.eps_scaling import EpsScalingManager
+from src.hierarchical.multiscale_solver import HierarchicalMultiscaleSolver
+from run_benchmarks import make_instance, build_matched_trees
+
+TOL = 1e-7
+
+
+def dict_to_dense(mu_dict, n, m):
+    P = np.zeros((n, m))
+    for x in mu_dict:
+        for y, mass in mu_dict[x].items():
+            P[x, y] = mass
+    return P
+
+
+def list_to_dense(triples, n, m):
+    P = np.zeros((n, m))
+    for x, y, mass in triples:
+        P[x, y] += mass
+    return P
+
+
+def eps_cs_violation(C_norm, P, beta, eps):
+    """Largest amount by which eps-CS is violated on any used pair.
+    <= ~1e-7 means eps-CS holds. Uses ALL targets in the min (full matrix)."""
+    net = C_norm - beta[None, :]
+    best = net.min(axis=1)
+    used = P > TOL
+    viol = np.where(used, net - best[:, None] - eps, -np.inf)
+    return float(viol.max())
+
+
+def t1(N=32, seed=40, eps=1e-3):
+    X, Y, mu_X, mu_Y, C, cmax = make_instance(N, seed)
+    s = AuctionOT(X, Y, mu_X, mu_Y, epsilon=eps, normalize=False, max_c=cmax)
+    mu, cost, iters = s.solve()
+    beta = s.get_effective_beta()
+    P = dict_to_dense(mu, N, N)
+    print(f"iterations           : {iters}")
+    print(f"max |effective beta| : {np.abs(beta).max():.3e}   (0 means the duals are being thrown away)")
+    print(f"beta_diamond max abs : {np.abs(s.beta_diamond).max():.3e}")
+    print(f"eps-CS violation     : {eps_cs_violation(C / cmax, P, beta, eps):.3e}   (should be <= 1e-7)")
+
+
+def t2(N=64, seed=40):
+    X, Y, mu_X, mu_Y, C, cmax = make_instance(N, seed)
+    tight = 0.5 / (N + 1)
+
+    mgr = EpsScalingManager(AuctionOT, X_pts=X, Y_pts=Y, mu_X=mu_X, mu_Y=mu_Y,
+                            normalize=False, max_c=cmax, target_eps=tight, min_eps=1e-5)
+    mu, _, _, _ = mgr.solve()
+    Pd = dict_to_dense(mu, N, N)
+    print(f"dense : max row err {np.abs(Pd.sum(1) - mu_X).max():.2e}, "
+          f"max col err {np.abs(Pd.sum(0) - mu_Y).max():.2e}")
+
+    for k in (1, 8):
+        tx, ty = build_matched_trees(X, Y, max_points_per_cell=k)
+        sol = HierarchicalMultiscaleSolver(tx, ty, mu_X, mu_Y, max_c=cmax,
+                                           target_eps=tight, min_eps=1e-5)
+        Ph = list_to_dense(sol.solve(), N, N)
+        print(f"hier k={k}: max row err {np.abs(Ph.sum(1) - mu_X).max():.2e}, "
+              f"max col err {np.abs(Ph.sum(0) - mu_Y).max():.2e}")
+
+
+def t3(N=64, seeds=(40, 50, 100)):
+    for seed in seeds:
+        X, Y, mu_X, mu_Y, C, cmax = make_instance(N, seed)
+        exact = ot.emd2(mu_X, mu_Y, C)
+        tight = 0.5 / (N + 1)
+        for k in (1, 8):
+            tx, ty = build_matched_trees(X, Y, max_points_per_cell=k)
+            sol = HierarchicalMultiscaleSolver(tx, ty, mu_X, mu_Y, max_c=cmax,
+                                               target_eps=tight, min_eps=1e-5)
+            trip = sol.solve()
+            cost = sum(m * C[x, y] for x, y, m in trip)
+            print(f"seed {seed} k={k}: gap {(cost - exact) / exact * 100:+.4f}%  "
+                  f"(negative gap = marginals violated)")
+
+
+def t4(N=64, seed=40):
+    """Needs two lines at the END of HierarchicalMultiscaleSolver.solve(), before the return:
+           self.last_mu = current_mu
+           self.last_beta = final_beta
+    Only meaningful for k = 1 (every leaf is a single point)."""
+    X, Y, mu_X, mu_Y, C, cmax = make_instance(N, seed)
+    tx, ty = build_matched_trees(X, Y, max_points_per_cell=1)
+    eps = 0.5 / (N + 1)
+    sol = HierarchicalMultiscaleSolver(tx, ty, mu_X, mu_Y, max_c=cmax,
+                                       target_eps=eps, min_eps=1e-5)
+    sol.solve()
+    fx = tx.get_active_cells_at_depth(sol.max_depth)
+    fy = ty.get_active_cells_at_depth(sol.max_depth)
+    assert all(len(c.point_indices) == 1 for c in fx + fy), "leaves are not singletons"
+    P = np.zeros((N, N))
+    beta_pt = np.zeros(N)
+    for i in sol.last_mu:
+        for j, m in sol.last_mu[i].items():
+            P[fx[i].point_indices[0], fy[j].point_indices[0]] += m
+    for j, cell in enumerate(fy):
+        beta_pt[cell.point_indices[0]] = sol.last_beta[j]
+    print(f"max |beta|       : {np.abs(beta_pt).max():.3e}")
+    print(f"eps-CS violation : {eps_cs_violation(C / cmax, P, beta_pt, eps):.3e}   (should be <= 1e-7)")
+
+
+if __name__ == "__main__":
+    {"t1": t1, "t2": t2, "t3": t3, "t4": t4}[sys.argv[1]]()
