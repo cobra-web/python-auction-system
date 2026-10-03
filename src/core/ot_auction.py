@@ -106,13 +106,14 @@ class AuctionOT:
         return np.sum((self.X_pts[x] - self.Y_pts[y])**2)
 
     def get_effective_beta(self):
-        eff_beta = np.copy(self.beta_diamond)
-        for y in range(self.N_Y):
-            active_x = self._get_active_xs_for_y(y)
-            if active_x:
-                eff_beta[y] = max(eff_beta[y], max(self._get_beta_tilde(x, y) for x in active_x))
-        return eff_beta
-
+    eff_beta = np.copy(self.beta_diamond)
+    full = self.assigned_Y >= self.mu_Y - TOL
+    for y in np.flatnonzero(full):
+        owners = self._get_active_xs_for_y(y)
+        if owners:
+            eff_beta[y] = max(self._get_beta_tilde(x, y) for x in owners)
+    return eff_beta
+    
     def _admissible(self, x):
         if self.neighbors is None:
             return np.arange(self.N_Y)
