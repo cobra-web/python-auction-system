@@ -189,5 +189,27 @@ def t1c(N=32, seed=40, eps=1e-3):
         print("eps-CS held before every turn; the violation appears only after the last bid.")
 
 
+def t1d(N=32, seed=40, eps=1e-3):
+    X, Y, mu_X, mu_Y, C, cmax = make_instance(N, seed)
+    s = AuctionOT(X, Y, mu_X, mu_Y, epsilon=eps, normalize=False, max_c=cmax)
+    mu, _, _ = s.solve()
+    beta = s.get_effective_beta()
+    net = C / cmax - beta[None, :]
+    best = net.min(axis=1)
+    P = dict_to_dense(mu, N, N)
+    own, other, n_multi = 0, 0, 0
+    for x in range(N):
+        yb = int(np.argmin(net[x]))
+        for y in range(N):
+            if P[x, y] > TOL and net[x, y] - best[x] - eps > 1e-7:
+                if P[x, yb] > TOL:
+                    own += 1
+                else:
+                    other += 1
+        n_multi += int((P[x] > TOL).sum() > 1)
+    print(f"violating pairs where x owns its best target: {own}, where it does not: {other}")
+    print(f"buyers that ended with shares in more than one target: {n_multi}")
+
+
 if __name__ == "__main__":
-    {"t1": t1, "t1b": t1b, "t1c": t1c, "t2": t2, "t3": t3, "t4": t4}[sys.argv[1]]()
+    {"t1": t1, "t1b": t1b, "t1c": t1c, "t1d": t1d, "t2": t2, "t3": t3, "t4": t4}[sys.argv[1]]()
