@@ -3,7 +3,20 @@ from collections import defaultdict
 
 TOL = 1e-7
 
+
 class AuctionOT:
+    """Gauss-Seidel auction for the discrete Kantorovich problem with integer masses.
+
+    Sign convention (SS13, Sec. 3): beta is a VALUE (higher = more attractive). The net cost
+    of target y for source x is  c(x,y)/max_c - beta(y).  A bid LOWERS beta.
+
+    Dual state (SS13 Sec. 3, Bertsekas-Castanon 1989 Sec. 4):
+      beta_diamond[y] : value of the still unclaimed capacity of y
+      beta_tilde(x,y) : value at which x acquired its share of y
+      effective beta(y) = min/max rule below: if y is fully assigned, the MAX over owners'
+                          beta_tilde (= lowest price class value), otherwise beta_diamond[y].
+    """
+
     def __init__(self, X_pts, Y_pts, mu_X, mu_Y, epsilon=None,
                  allowed_edges=None, initial_beta=None, normalize=True, max_c=None):
         self.X_pts = np.array(X_pts, dtype=float)
@@ -16,7 +29,7 @@ class AuctionOT:
         elif normalize:
             min_X, max_X = np.min(self.X_pts, axis=0), np.max(self.X_pts, axis=0)
             min_Y, max_Y = np.min(self.Y_pts, axis=0), np.max(self.Y_pts, axis=0)
-            max_dist_sq = np.sum((np.maximum(max_X, max_Y) - np.minimum(min_X, min_Y))**2)
+            max_dist_sq = np.sum((np.maximum(max_X, max_Y) - np.minimum(min_X, min_Y)) ** 2)
             self.max_c = max_dist_sq if max_dist_sq > 0 else 1.0
         else:
             self.max_c = 1.0
@@ -24,42 +37,34 @@ class AuctionOT:
         self.mu_X = np.array(mu_X, dtype=float)
         self.mu_Y = np.array(mu_Y, dtype=float)
         self.epsilon = float(epsilon) if epsilon is not None else 1e-3
-        
+
         self.assigned_Y = np.zeros(self.N_Y, dtype=float)
         self.unassigned_X = np.copy(self.mu_X)
-        self.beta_diamond = np.array(initial_beta, dtype=float) if initial_beta is not None else np.zeros(self.N_Y, dtype=float)
+        self.beta_diamond = (np.array(initial_beta, dtype=float)
+                             if initial_beta is not None else np.zeros(self.N_Y, dtype=float))
 
-        # ---------------------------------------------------------
-        # UNCONDITIONAL OWNERSHIP TRACKING (For both Dense and Sparse)
-        # ---------------------------------------------------------
+        # ownership tracking (dense and sparse)
         self.owners = [set() for _ in range(self.N_Y)]
 
-        # ---------------------------------------------------------
-        # HYBRID SPARSE STRUCTURES FOR MU AND BETA_TILDE
-        # ---------------------------------------------------------
         if allowed_edges is not None:
             self.is_sparse = True
             nbrs = [[] for _ in range(self.N_X)]
             for edge in allowed_edges:
                 x, y = int(edge[0]), int(edge[1])
                 nbrs[x].append(y)
-            
+
             self.neighbors = [np.array(sorted(set(v)), dtype=int) for v in nbrs]
-            
-            # Parallel arrays: indices match the indices in self.neighbors
             self.mu_arrs = [np.zeros(len(n), dtype=float) for n in self.neighbors]
             self.beta_tilde_arrs = [np.zeros(len(n), dtype=float) for n in self.neighbors]
-            
             self.col_index = [{int(y): i for i, y in enumerate(nbr)} for nbr in self.neighbors]
-            
         else:
             self.is_sparse = False
             self.neighbors = None
             self.mu_dict = defaultdict(lambda: defaultdict(float))
             self.beta_tilde_dict = defaultdict(lambda: defaultdict(float))
 
-    # --- HELPER FUNCTIONS FOR HYBRID LOOKUPS ---
-    
+    # ---------------- hybrid lookups ----------------
+
     def _get_mu(self, x, y):
         if self.is_sparse:
             idx = self.col_index[x].get(y)
@@ -93,19 +98,35 @@ class AuctionOT:
             self.beta_tilde_dict[x][y] = val
 
     def _get_active_xs_for_y(self, y):
-        """Returns a list of x indices that have mass assigned to y"""
+        """Sources that currently hold mass at y."""
         return [x for x in self.owners[y] if self._get_mu(x, y) > TOL]
 
-    # ---------------------------------------------------------
+    def _own_ys(self, x):
+        """Targets at which source x currently holds mass."""
+        if self.is_sparse:
+            return [int(y) for y, m in zip(self.neighbors[x], self.mu_arrs[x]) if m > TOL]
+        return [y for y, m in self.mu_dict[x].items() if m > TOL]
+
+    # ---------------- costs ----------------
 
     def _cost(self, x, ys):
-        sq_dist = np.sum((self.X_pts[x] - self.Y_pts[ys])**2, axis=1)
+        sq_dist = np.sum((self.X_pts[x] - self.Y_pts[ys]) ** 2, axis=1)
         return sq_dist / self.max_c
 
     def _cost_raw(self, x, y):
-        return np.sum((self.X_pts[x] - self.Y_pts[y])**2)
+        return np.sum((self.X_pts[x] - self.Y_pts[y]) ** 2)
+
+    # ---------------- dual state ----------------
 
     def get_effective_beta(self):
+        """Effective value of every target (SS13 Sec. 3; Bertsekas-Castanon Eq. (39)).
+
+        Fully assigned target: max over its owners of beta_tilde(x, y).
+        Target with free capacity: beta_diamond[y].
+        Every owner value is <= beta_diamond[y] (a bid never raises a value), so a
+        max with beta_diamond[y] for full targets would always return beta_diamond[y]
+        and discard the converged duals.
+        """
         eff_beta = np.copy(self.beta_diamond)
         full = self.assigned_Y >= self.mu_Y - TOL
         for y in np.flatnonzero(full):
@@ -113,7 +134,7 @@ class AuctionOT:
             if owners:
                 eff_beta[y] = max(self._get_beta_tilde(x, y) for x in owners)
         return eff_beta
-    
+
     def _admissible(self, x):
         if self.neighbors is None:
             return np.arange(self.N_Y)
@@ -126,7 +147,7 @@ class AuctionOT:
 
         free_Y = self.mu_Y[ys] - self.assigned_Y[ys]
         free_mask = free_Y > TOL
-        
+
         valid_ys_free = ys[free_mask]
         costs_free = self._cost(x, valid_ys_free)
         slacks_free = costs_free - self.beta_diamond[valid_ys_free]
@@ -137,11 +158,11 @@ class AuctionOT:
         y_idx_local = []
         mu_vals = []
         beta_tilde_vals = []
-        
+
         for idx, y in enumerate(ys):
             active_xs = self._get_active_xs_for_y(y)
             for xp in active_xs:
-                if xp != x:
+                if xp != x:  # B-C (48): Pi(i) only contains flows of OTHER sources
                     xp_indices.append(xp)
                     y_idx_local.append(idx)
                     mu_vals.append(self._get_mu(xp, y))
@@ -166,9 +187,9 @@ class AuctionOT:
         caps = np.concatenate((caps_free, caps_occ))
         ys_arr = np.concatenate((valid_ys_free, actual_ys))
         xp_arr = np.concatenate((xp_free, xp_indices))
-        
+
         order = np.argsort(slacks, kind="stable")
-        
+
         return ys_arr[order], slacks[order], caps[order], xp_arr[order]
 
     @staticmethod
@@ -188,15 +209,15 @@ class AuctionOT:
     def _place(self, x, y, owner_xp, amount, new_beta_tilde):
         if amount <= TOL:
             return 0.0
-            
+
         if owner_xp == -1:
             free = self.mu_Y[y] - self.assigned_Y[y]
             take = min(amount, free)
-            if take <= TOL: 
+            if take <= TOL:
                 return 0.0
-            
+
             self._set_mu(x, y, self._get_mu(x, y) + take)
-            self.owners[y].add(x) 
+            self.owners[y].add(x)
 
             self.assigned_Y[y] += take
             self.unassigned_X[x] -= take
@@ -205,12 +226,12 @@ class AuctionOT:
         else:
             avail = self._get_mu(owner_xp, y)
             take = min(amount, avail)
-            if take <= TOL: 
+            if take <= TOL:
                 return 0.0
-            
+
             self._set_mu(owner_xp, y, self._get_mu(owner_xp, y) - take)
             self._set_mu(x, y, self._get_mu(x, y) + take)
-            
+
             if self._get_mu(owner_xp, y) <= TOL:
                 self.owners[y].discard(owner_xp)
             self.owners[y].add(x)
@@ -252,22 +273,31 @@ class AuctionOT:
                         break
                     y = ys[i]
                     owner_xp = xp_arr[i]
-                    
+
                     cost_val = self._cost(x, np.array([y]))[0]
                     new_beta_tilde = cost_val - alpha_prime - eps
-                    
+
                     placed = self._place(x, y, owner_xp, remaining, new_beta_tilde)
                     if placed > 0:
                         remaining -= placed
                         moved_this_sweep += placed
+
+                # Bertsekas-Castanon (1989), Eq. (27), p. 79 and Sec. 4, p. 88: shares that x
+                # already holds bid again at the SAME level, so that every unit of x sits at net
+                # cost alpha' + eps. Values only decrease, so beta_tilde never rises.
+                for y in self._own_ys(x):
+                    new_bt = self._cost(x, np.array([y]))[0] - alpha_prime - eps
+                    self._set_beta_tilde(x, y, min(self._get_beta_tilde(x, y), new_bt))
 
             iterations += 1
             if iterations >= max_iterations:
                 break
 
             if moved_this_sweep <= TOL:
-                print(f"[AuctionOT] Deadlock at iter {iterations}; unassigned = {total_unassigned:.3e}.")
-                break
+                raise RuntimeError(
+                    f"[AuctionOT] Deadlock at iteration {iterations}; "
+                    f"unassigned mass = {total_unassigned:.3e}. "
+                    f"Check feasibility of the admissible edge set.")
 
         out_mu = defaultdict(lambda: defaultdict(float))
         cost = 0.0
@@ -283,5 +313,5 @@ class AuctionOT:
                     if mass > TOL:
                         out_mu[x][y] = mass
                         cost += mass * self._cost_raw(x, y)
-                        
+
         return out_mu, cost, iterations
