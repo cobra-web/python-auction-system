@@ -117,6 +117,35 @@ def t4(N=64, seed=40):
     print(f"max |beta|       : {np.abs(beta_pt).max():.3e}")
     print(f"eps-CS violation : {eps_cs_violation(C / cmax, P, beta_pt, eps):.3e}   (should be <= 1e-7)")
 
+def t1b(N=32, seed=40, eps=1e-3, top=5):
+    X, Y, mu_X, mu_Y, C, cmax = make_instance(N, seed)
+    s = AuctionOT(X, Y, mu_X, mu_Y, epsilon=eps, normalize=False, max_c=cmax)
+    mu, cost, iters = s.solve()
+    beta = s.get_effective_beta()
+    Cn = C / cmax
+    P = dict_to_dense(mu, N, N)
+    print("unassigned left :", s.unassigned_X.sum())
+    print("max row err     :", np.abs(P.sum(1) - mu_X).max(),
+          " max col err:", np.abs(P.sum(0) - mu_Y).max())
+    net = Cn - beta[None, :]
+    best = net.min(axis=1)
+    rows = []
+    for x in range(N):
+        for y in range(N):
+            if P[x, y] > TOL:
+                rows.append((net[x, y] - best[x] - eps, x, y))
+    rows.sort(reverse=True)
+    n_viol = sum(1 for r in rows if r[0] > 1e-7)
+    print(f"{n_viol} of {len(rows)} used pairs violate eps-CS")
+    for v, x, y in rows[:top]:
+        yb = int(np.argmin(net[x]))
+        print(f"x={x} y={y} viol={v:.3e} | y full={s.assigned_Y[y] >= s.mu_Y[y] - TOL}"
+              f" owners={len(s._get_active_xs_for_y(y))}"
+              f" own btilde={s._get_beta_tilde(x, y):.4f} eff beta={beta[y]:.4f}"
+              f" net_used={net[x, y]:.4f}"
+              f" | best y*={yb} net*={best[x]:.4f}"
+              f" y* full={s.assigned_Y[yb] >= s.mu_Y[yb] - TOL} eff beta*={beta[yb]:.4f}")
+
 
 if __name__ == "__main__":
-    {"t1": t1, "t2": t2, "t3": t3, "t4": t4}[sys.argv[1]]()
+    {"t1": t1, "t1b": t1b, "t2": t2, "t3": t3, "t4": t4}[sys.argv[1]]()
