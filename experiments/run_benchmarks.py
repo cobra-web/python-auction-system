@@ -3,6 +3,7 @@ import os
 import sys
 import time
 import traceback
+import warnings
 
 import numpy as np
 import matplotlib
@@ -15,7 +16,7 @@ from src.core.ot_auction import AuctionOT
 from src.hierarchical.partitions import HierarchicalPartition
 from src.hierarchical.multiscale_solver import HierarchicalMultiscaleSolver
 
-SCALES = [16, 32, 64, 128, 256, 512, 1024, 2048, 6000]
+SCALES = [16, 32, 64, 128, 256, 512, 1024]
 
 SEEDS_BY_N = {
     16:   [40, 50, 100, 2024, 999],
@@ -33,8 +34,10 @@ SEEDS_BY_N = {
 # the gap is then only bounded, not close to zero.
 ACCURACY = 1e-3
 MARGINAL_TOL = 1e-6
+POT_MAX_ITER = 100_000_000   # POT's default (100000) is too small for N >= 4096
 
 CSV_PATH = "benchmark_results.csv"
+RAW_PATH = "benchmark_raw.csv"   # one row per (N, seed), for paired comparisons
 
 
 class Silence:
@@ -89,8 +92,14 @@ def marginal_error(plan_dense, mu_X, mu_Y):
                float(np.abs(plan_dense.sum(0) - mu_Y).max()))
 
 
-def run_benchmarks():
-    header = (f"| {'N':<5} | {'Method':<13} | {'Time Mean':>10} | {'Time Std':>9} "
+def progress(msg):
+    """Always visible, also while a solver runs inside Silence()."""
+    print(f"[{time.strftime('%H:%M:%S')}] {msg}", file=sys.__stderr__, flush=True)
+
+
+def run_benchmarks(scales=None, seeds_override=None, append=False):
+    scales = list(scales) if scales else list(SCALES)
+    header =(f"| {'N':<5} | {'Method':<13} | {'Time Mean':>10} | {'Time Std':>9} "
               f"| {'Gap Mean':>9} | {'Gap Std':>8} | {'Seeds':>5} | {'Fail':>4} |")
     rule = "-" * len(header)
 
@@ -107,17 +116,21 @@ def run_benchmarks():
         results[k + "_mean"] = []
         results[k + "_std"] = []
 
-    with open(CSV_PATH, "w", newline="") as fh:
-        csv.writer(fh).writerow(
-            ["N", "seeds", "failures"]
-            + [f"{k}_{s}" for k in keys for s in ("mean", "std")])
+    if not append and os.path.exists(RAW_PATH):
+        os.remove(RAW_PATH)
+    if not (append and os.path.exists(CSV_PATH)):
+        with open(CSV_PATH, "w", newline="") as fh:
+            csv.writer(fh).writerow(
+                ["N", "seeds", "failures"]
+                + [f"{k}_{s}" for k in keys for s in ("mean", "std")])
 
-    for N in SCALES:
-        seeds = SEEDS_BY_N.get(N, [42, 50, 100])
+    for N in scales:
+        seeds = list(seeds_override) if seeds_override else SEEDS_BY_N.get(N, [42, 50, 100])
         data = {k: [] for k in keys}
         failures = 0
 
         for seed in seeds:
+            progress(f"N={N} seed={seed}: start")
             X_pts, Y_pts, mu_X, mu_Y, C, global_max_c = make_instance(N, seed)
             M = float(mu_X.sum())
             target = ACCURACY / M
@@ -126,8 +139,15 @@ def run_benchmarks():
                 # POT reference, timed including its own cost matrix
                 t0 = time.perf_counter()
                 C_pot = ot.dist(X_pts, Y_pts, metric="sqeuclidean")
-                exact_cost = float(ot.emd2(mu_X, mu_Y, C_pot))
+                exact_cost, pot_log = ot.emd2(mu_X, mu_Y, C_pot, numItermax=POT_MAX_ITER, log=True)
                 pot_time = time.perf_counter() - t0
+                if pot_log.get("result_code") != 1:
+                    # POT stopped early: its cost is NOT optimal, so no gap can be computed.
+                    progress(f"N={N} seed={seed}: POT NOT OPTIMAL ({pot_log.get('warning')}); "
+                             f"gap for this seed is not available")
+                    exact_cost = float("nan")
+                exact_cost = float(exact_cost)
+                progress(f"N={N} seed={seed}: POT done ({pot_time:.2f}s), running dense auction")
 
                 # Dense auction with eps-scaling
                 t0 = time.perf_counter()
@@ -137,6 +157,7 @@ def run_benchmarks():
                         normalize=False, max_c=global_max_c, target_eps=target)
                     dense_mu, _, _, _ = dense_mgr.solve()
                 dense_time = time.perf_counter() - t0
+                progress(f"N={N} seed={seed}: dense done ({dense_time:.1f}s), running hierarchical")
 
                 P = np.zeros((N, N))
                 for x in dense_mu:
@@ -154,6 +175,7 @@ def run_benchmarks():
                         tree_X, tree_Y, mu_X, mu_Y, max_c=global_max_c, target_eps=target)
                     plan = hier_solver.solve()
                 hier_time = time.perf_counter() - t0
+                progress(f"N={N} seed={seed}: hierarchical done ({hier_time:.1f}s)")
 
                 Ph = np.zeros((N, N))
                 for x, y, m in plan:
@@ -168,11 +190,23 @@ def run_benchmarks():
                 traceback.print_exc(file=sys.__stderr__)
                 continue
 
+            dense_gap = (dense_cost - exact_cost) / exact_cost * 100.0
+            hier_gap = (hier_cost - exact_cost) / exact_cost * 100.0
             data["pot_time"].append(pot_time)
             data["dense_time"].append(dense_time)
             data["hier_time"].append(hier_time)
-            data["dense_gap"].append((dense_cost - exact_cost) / exact_cost * 100.0)
-            data["hier_gap"].append((hier_cost - exact_cost) / exact_cost * 100.0)
+            data["dense_gap"].append(dense_gap)
+            data["hier_gap"].append(hier_gap)
+
+            new_file = not os.path.exists(RAW_PATH)
+            with open(RAW_PATH, "a", newline="") as fh:
+                w = csv.writer(fh)
+                if new_file:
+                    w.writerow(["N", "seed", "pot_time", "dense_time", "hier_time",
+                                "hier_over_dense", "dense_gap", "hier_gap"])
+                w.writerow([N, seed, pot_time, dense_time, hier_time,
+                            hier_time / dense_time, dense_gap, hier_gap])
+            progress(f"N={N} seed={seed}: hier/dense = {hier_time / dense_time:.2f}")
 
         n_ok = len(data["dense_time"])
         if n_ok == 0:
@@ -183,9 +217,11 @@ def run_benchmarks():
 
         ddof = 1 if n_ok > 1 else 0
         row = {}
-        for k in keys:
-            row[k + "_mean"] = float(np.mean(data[k]))
-            row[k + "_std"] = float(np.std(data[k], ddof=ddof))
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")  # all-NaN gaps when POT was not optimal
+            for k in keys:
+                row[k + "_mean"] = float(np.nanmean(data[k]))
+                row[k + "_std"] = float(np.nanstd(data[k], ddof=ddof))
 
         results["N"].append(N)
         for key, value in row.items():
@@ -281,6 +317,37 @@ def plot_results(results):
     plt.close()
 
 
+def results_from_csv(path=CSV_PATH):
+    """Rebuild the results dict from the checkpoint CSV (last row per N wins)."""
+    rows = {}
+    with open(path, newline="") as fh:
+        for r in csv.DictReader(fh):
+            rows[int(r["N"])] = r
+    results = {"N": sorted(rows)}
+    names = [k for k in next(iter(rows.values())) if k not in ("N", "seeds", "failures")]
+    for name in names:
+        results[name] = [float(rows[n][name]) for n in results["N"]]
+    return results
+
+
 if __name__ == "__main__":
-    final_results = run_benchmarks()
+    import argparse
+
+    ap = argparse.ArgumentParser(description="OT solver benchmark")
+    ap.add_argument("--scales", type=int, nargs="+", help="only these N (default: SCALES)")
+    ap.add_argument("--seeds", type=int, nargs="+", help="only these seeds (default: SEEDS_BY_N)")
+    ap.add_argument("--append", action="store_true",
+                    help="keep the existing CSV and add rows (use for extra N)")
+    ap.add_argument("--plot-only", action="store_true",
+                    help="no solving: summary table and plots from the CSV")
+    args = ap.parse_args()
+
+    if args.plot_only:
+        final_results = results_from_csv()
+        print_summary(final_results)
+    else:
+        final_results = run_benchmarks(args.scales, args.seeds, args.append)
+        if args.append and os.path.exists(CSV_PATH):
+            final_results = results_from_csv()
+            print_summary(final_results)
     plot_results(final_results)
