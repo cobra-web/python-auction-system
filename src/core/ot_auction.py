@@ -119,19 +119,20 @@ class AuctionOT:
     # ---------------- dual state ----------------
 
     def get_effective_beta(self):
-        """Effective dual values beta(y) (SS13, p. 456).
+        """Effective value of every target (SS13 Sec. 3; Bertsekas-Castanon Eq. (39)).
 
-        If y is fully assigned (sum_x mu(x,y) = nu(y)), beta(y) is the maximum of the
-        per-share values beta_tilde(x,y) over the sources x that hold mass at y.
-        Otherwise beta(y) = beta_diamond(y), the value of the unassigned atoms.
+        Fully assigned target: max over its owners of beta_tilde(x, y).
+        Target with free capacity: beta_diamond[y].
+        Every owner value is <= beta_diamond[y] (a bid never raises a value), so a
+        max with beta_diamond[y] for full targets would always return beta_diamond[y]
+        and discard the converged duals.
         """
         eff_beta = np.copy(self.beta_diamond)
-        for y in range(self.N_Y):
-            if self.assigned_Y[y] < self.mu_Y[y] - TOL:
-                continue
-            active_x = self._get_active_xs_for_y(y)
-            if active_x:
-                eff_beta[y] = max(self._get_beta_tilde(x, y) for x in active_x)
+        full = self.assigned_Y >= self.mu_Y - TOL
+        for y in np.flatnonzero(full):
+            owners = self._get_active_xs_for_y(y)
+            if owners:
+                eff_beta[y] = max(self._get_beta_tilde(x, y) for x in owners)
         return eff_beta
 
     def _admissible(self, x):
