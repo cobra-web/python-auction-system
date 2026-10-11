@@ -77,6 +77,11 @@ class ConsistencyChecker:
             self.c_hat_cache[key] = val
         return val
 
+    def _level_cost(self, x, y):
+        """Normalised solver cost of the level problem (centroid cost) for active cells x, y."""
+        d = self._level_X_pts[x] - self._level_Y_pts[y]
+        return float(np.dot(d, d)) / self.max_c
+
     def run_consistency_check(self, alpha_prime, beta, target_depth, cost_fn=None):
         """Returns the list of violating pairs and adds them to N_set.
 
@@ -116,3 +121,6 @@ class ConsistencyChecker:
             for cb in b_children:
                 found.extend(self._check_recursive(ca, cb, alpha_prime, beta, target_depth))
         return found
+
+
+
