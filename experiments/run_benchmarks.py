@@ -91,7 +91,7 @@ class Capture:
         self.tag = tag
 
     def __enter__(self):
-        self._fh = open(LOG_PATH, "a")
+        self._fh = open(LOG_PATH, "a", encoding="utf-8")
         self._fh.write(f"\n=== {self.tag} ===\n")
         self._stdout, self._stderr = sys.stdout, sys.stderr
         sys.stdout = self._fh
@@ -126,7 +126,7 @@ def write_metadata(extra=None):
         f"SCALES: {SCALES}",
     ]
     lines += [f"{k}: {v}" for k, v in (extra or {}).items()]
-    with open(META_PATH, "w") as fh:
+    with open(META_PATH, "w", encoding="utf-8") as fh:
         fh.write("\n".join(lines) + "\n")
 
 
